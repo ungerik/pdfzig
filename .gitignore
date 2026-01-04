@@ -1,8 +1,6 @@
 # Zig build artifacts
-.zig-cache/
 zig-out/
-*.o
+.zig-cache/
 
 # Test cache directory for downloaded PDF samples
 test-cache/
-

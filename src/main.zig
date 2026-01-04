@@ -1,10 +1,11 @@
 //! pdfzig - PDF utility tool using PDFium
 //!
 //! Commands:
-//!   render         Render PDF pages to images
-//!   extract-text   Extract text content from PDF
-//!   extract-images Extract embedded images from PDF
-//!   info           Display PDF metadata and information
+//!   render              Render PDF pages to images
+//!   extract-text        Extract text content from PDF
+//!   extract-images      Extract embedded images from PDF
+//!   extract-attachments Extract embedded attachments from PDF
+//!   info                Display PDF metadata and information
 
 const std = @import("std");
 const pdfium = @import("pdfium.zig");
@@ -17,6 +18,7 @@ const Command = enum {
     render,
     extract_text,
     extract_images,
+    extract_attachments,
     info,
     help,
     version_cmd,
@@ -63,6 +65,8 @@ pub fn main() !void {
         .extract_text
     else if (std.mem.eql(u8, command_str, "extract-images"))
         .extract_images
+    else if (std.mem.eql(u8, command_str, "extract-attachments"))
+        .extract_attachments
     else if (std.mem.eql(u8, command_str, "info"))
         .info
     else {
@@ -81,6 +85,7 @@ pub fn main() !void {
         .render => try runRenderCommand(allocator, &arg_it, stdout, stderr),
         .extract_text => try runExtractTextCommand(allocator, &arg_it, stdout, stderr),
         .extract_images => try runExtractImagesCommand(allocator, &arg_it, stdout, stderr),
+        .extract_attachments => try runExtractAttachmentsCommand(allocator, &arg_it, stdout, stderr),
         .info => try runInfoCommand(allocator, &arg_it, stdout, stderr),
         .help => printMainUsage(stdout),
         .version_cmd => try stdout.print("pdfzig {s}\n", .{version}),
@@ -577,6 +582,201 @@ fn runExtractImagesCommand(
 }
 
 // ============================================================================
+// Extract Attachments Command
+// ============================================================================
+
+const ExtractAttachmentsArgs = struct {
+    input_path: ?[]const u8 = null,
+    output_dir: []const u8 = ".",
+    pattern: ?[]const u8 = null, // Glob pattern like "*.xml"
+    password: ?[]const u8 = null,
+    list_only: bool = false,
+    quiet: bool = false,
+    show_help: bool = false,
+};
+
+fn runExtractAttachmentsCommand(
+    allocator: std.mem.Allocator,
+    arg_it: *std.process.ArgIterator,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    var args = ExtractAttachmentsArgs{};
+
+    while (arg_it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                args.show_help = true;
+            } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
+                args.quiet = true;
+            } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--list")) {
+                args.list_only = true;
+            } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
+                args.password = arg_it.next();
+            } else {
+                try stderr.print("Unknown option: {s}\n", .{arg});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else {
+            if (args.input_path == null) {
+                args.input_path = arg;
+            } else if (args.pattern == null and std.mem.indexOfAny(u8, arg, "*?") != null) {
+                // If it contains wildcards, treat as pattern
+                args.pattern = arg;
+            } else if (args.pattern == null and args.output_dir[0] == '.') {
+                // First non-wildcard positional after input is output_dir
+                args.output_dir = arg;
+            } else if (args.pattern == null) {
+                // Could be a pattern without wildcards (exact match) or output_dir
+                // Heuristic: if it looks like a filename with extension, it's a pattern
+                if (std.mem.lastIndexOfScalar(u8, arg, '.')) |_| {
+                    args.pattern = arg;
+                } else {
+                    args.output_dir = arg;
+                }
+            }
+        }
+    }
+
+    if (args.show_help) {
+        printExtractAttachmentsUsage(stdout);
+        return;
+    }
+
+    const input_path = args.input_path orelse {
+        try stderr.writeAll("Error: No input PDF file specified\n\n");
+        try stderr.flush();
+        printExtractAttachmentsUsage(stdout);
+        std.process.exit(1);
+    };
+
+    // Create output directory if not list-only mode
+    if (!args.list_only) {
+        std.fs.cwd().makePath(args.output_dir) catch |err| {
+            try stderr.print("Error: Could not create output directory: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    // Open document
+    var doc = openDocument(input_path, args.password, stderr) orelse std.process.exit(1);
+    defer doc.close();
+
+    const attachment_count = doc.getAttachmentCount();
+    if (attachment_count == 0) {
+        if (!args.quiet) {
+            try stdout.writeAll("No embedded files found.\n");
+        }
+        return;
+    }
+
+    var extracted_count: u32 = 0;
+    var it = doc.attachments();
+
+    while (it.next()) |attachment| {
+        const name = attachment.getName(allocator) orelse continue;
+        defer allocator.free(name);
+
+        // Apply pattern filter if specified
+        if (args.pattern) |pattern| {
+            if (!matchGlobPattern(pattern, std.fs.path.basename(name))) {
+                continue;
+            }
+        }
+
+        extracted_count += 1;
+
+        if (args.list_only) {
+            try stdout.print("{s}\n", .{name});
+            continue;
+        }
+
+        // Get the file data
+        const data = attachment.getData(allocator) orelse {
+            try stderr.print("Warning: Could not read data for {s}\n", .{name});
+            try stderr.flush();
+            continue;
+        };
+        defer allocator.free(data);
+
+        // Create output path - use basename of attachment name
+        const basename = std.fs.path.basename(name);
+        const output_path = std.fs.path.join(allocator, &.{ args.output_dir, basename }) catch continue;
+        defer allocator.free(output_path);
+
+        // Write the file
+        const file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+            try stderr.print("Error: Could not create {s}: {}\n", .{ output_path, err });
+            try stderr.flush();
+            continue;
+        };
+        defer file.close();
+
+        file.writeAll(data) catch |err| {
+            try stderr.print("Error: Could not write {s}: {}\n", .{ output_path, err });
+            try stderr.flush();
+            continue;
+        };
+
+        if (!args.quiet) {
+            try stdout.print("Extracted: {s}\n", .{output_path});
+        }
+    }
+
+    if (!args.quiet and !args.list_only) {
+        try stdout.print("\nExtracted {d} file(s)\n", .{extracted_count});
+    } else if (!args.quiet and args.list_only) {
+        try stdout.print("\nFound {d} file(s)\n", .{extracted_count});
+    }
+}
+
+/// Simple glob pattern matching supporting * and ? wildcards
+pub fn matchGlobPattern(pattern: []const u8, name: []const u8) bool {
+    var p_idx: usize = 0;
+    var n_idx: usize = 0;
+    var star_p: ?usize = null;
+    var star_n: usize = 0;
+
+    while (n_idx < name.len) {
+        if (p_idx < pattern.len) {
+            const p_char = pattern[p_idx];
+            const n_char = name[n_idx];
+
+            if (p_char == '*') {
+                // Record position for backtracking
+                star_p = p_idx;
+                star_n = n_idx;
+                p_idx += 1;
+                continue;
+            } else if (p_char == '?' or std.ascii.toLower(p_char) == std.ascii.toLower(n_char)) {
+                // Match single character (case-insensitive)
+                p_idx += 1;
+                n_idx += 1;
+                continue;
+            }
+        }
+
+        // Mismatch - try to backtrack to last *
+        if (star_p) |sp| {
+            p_idx = sp + 1;
+            star_n += 1;
+            n_idx = star_n;
+        } else {
+            return false;
+        }
+    }
+
+    // Skip trailing *s in pattern
+    while (p_idx < pattern.len and pattern[p_idx] == '*') {
+        p_idx += 1;
+    }
+
+    return p_idx == pattern.len;
+}
+
+// ============================================================================
 // Info Command
 // ============================================================================
 
@@ -685,6 +885,28 @@ fn printDocInfo(
     if (metadata.producer) |p| try stdout.print("  Producer: {s}\n", .{p});
     if (metadata.creation_date) |cd| try stdout.print("  Creation Date: {s}\n", .{cd});
     if (metadata.mod_date) |md| try stdout.print("  Modification Date: {s}\n", .{md});
+
+    // Attachments
+    const attachment_count = doc.getAttachmentCount();
+    if (attachment_count > 0) {
+        try stdout.print("\nAttachments: {d}\n", .{attachment_count});
+
+        var xml_count: u32 = 0;
+        var it = doc.attachments();
+        while (it.next()) |attachment| {
+            const name = attachment.getName(allocator) orelse continue;
+            defer allocator.free(name);
+
+            const is_xml = attachment.isXml(allocator);
+            if (is_xml) xml_count += 1;
+
+            try stdout.print("  {s}{s}\n", .{ name, if (is_xml) " [XML]" else "" });
+        }
+
+        if (xml_count > 0) {
+            try stdout.print("\nXML files: {d} (use 'extract-attachments \"*.xml\"' to extract)\n", .{xml_count});
+        }
+    }
 }
 
 // ============================================================================
@@ -734,10 +956,11 @@ fn printMainUsage(stdout: *std.Io.Writer) void {
         \\Usage: pdfzig <command> [options]
         \\
         \\Commands:
-        \\  render          Render PDF pages to images
-        \\  extract-text    Extract text content from PDF
-        \\  extract-images  Extract embedded images from PDF
-        \\  info            Display PDF metadata and information
+        \\  render              Render PDF pages to images
+        \\  extract-text        Extract text content from PDF
+        \\  extract-images      Extract embedded images from PDF
+        \\  extract-attachments Extract embedded attachments from PDF
+        \\  info                Display PDF metadata and information
         \\
         \\Global Options:
         \\  -h, --help      Show this help message
@@ -820,6 +1043,37 @@ fn printExtractImagesUsage(stdout: *std.Io.Writer) void {
     ) catch {};
 }
 
+fn printExtractAttachmentsUsage(stdout: *std.Io.Writer) void {
+    stdout.writeAll(
+        \\Usage: pdfzig extract-attachments [options] <input.pdf> [pattern] [output_dir]
+        \\
+        \\Extract embedded attachments from PDF.
+        \\
+        \\Arguments:
+        \\  input.pdf             Input PDF file
+        \\  pattern               Optional glob pattern to filter files (e.g., "*.xml")
+        \\  output_dir            Output directory (default: current directory)
+        \\
+        \\Options:
+        \\  -l, --list            List attachments without extracting
+        \\  -P, --password <PW>   Password for encrypted PDFs
+        \\  -q, --quiet           Suppress progress output
+        \\  -h, --help            Show this help message
+        \\
+        \\Pattern Syntax:
+        \\  *                     Match any characters
+        \\  ?                     Match single character
+        \\
+        \\Examples:
+        \\  pdfzig extract-attachments document.pdf                  # Extract all
+        \\  pdfzig extract-attachments document.pdf "*.xml"          # Extract XML files
+        \\  pdfzig extract-attachments document.pdf "*.xml" ./out    # Extract to directory
+        \\  pdfzig extract-attachments -l document.pdf               # List all attachments
+        \\  pdfzig extract-attachments -l document.pdf "*.json"      # List JSON files only
+        \\
+    ) catch {};
+}
+
 fn printInfoUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig info [options] <input.pdf>
@@ -844,6 +1098,7 @@ fn printInfoUsage(stdout: *std.Io.Writer) void {
 test {
     // Import test modules to include their tests
     _ = @import("info_test.zig");
+    _ = @import("attachments_test.zig");
     _ = @import("renderer.zig");
     _ = @import("image_writer.zig");
 }

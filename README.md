@@ -7,7 +7,8 @@ A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
 - **Render** PDF pages to PNG or JPEG images at any DPI
 - **Extract text** content from PDFs
 - **Extract images** embedded in PDF pages
-- **Display info** including metadata, page count, encryption status, and PDF version
+- **Extract attachments** embedded in PDFs with glob pattern filtering
+- **Display info** including metadata, page count, encryption status, attachments, and PDF version
 - Support for **password-protected** PDFs
 - **Multi-resolution output** - generate multiple image sizes in one pass
 
@@ -15,13 +16,13 @@ A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
 
 ### Requirements
 
-- Zig 0.15.0 or later
+- Zig 0.15.1 or later
 - curl (for downloading PDFium binaries during build)
 
 ### Build
 
 ```bash
-git clone https://github.com/user/pdfzig.git
+git clone https://github.com/ungerik/pdfzig.git
 cd pdfzig
 zig build
 ```
@@ -83,6 +84,27 @@ pdfzig extract-images -f jpeg -Q 90 document.pdf ./images
 pdfzig extract-images -p 1-5 document.pdf
 ```
 
+### Extract Attachments
+
+```bash
+# Extract all attachments
+pdfzig extract-attachments document.pdf
+
+# Extract only XML files using glob pattern
+pdfzig extract-attachments document.pdf "*.xml"
+
+# Extract to specific directory
+pdfzig extract-attachments document.pdf "*.xml" ./xml-output
+
+# List all attachments without extracting
+pdfzig extract-attachments -l document.pdf
+
+# List only JSON files
+pdfzig extract-attachments -l document.pdf "*.json"
+```
+
+Pattern syntax: `*` matches any characters, `?` matches a single character
+
 ### Display PDF Information
 
 ```bash
@@ -102,6 +124,12 @@ Metadata:
   Creator: LaTeX
   Producer: pdfTeX-1.40.23
   Creation Date: D:20240101120000+00'00'
+
+Attachments: 2
+  invoice.xml [XML]
+  data.json
+
+XML files: 1 (use 'extract-attachments "*.xml"' to extract)
 ```
 
 ### Password-Protected PDFs

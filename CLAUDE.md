@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pdfzig is a Zig CLI tool that uses PDFium to work with PDF files. It supports rendering pages to PNG/JPEG images, extracting text, extracting embedded images, and displaying PDF metadata.
+pdfzig is a Zig CLI tool that uses PDFium to work with PDF files. It supports rendering pages to PNG/JPEG images, extracting text, extracting embedded images, extracting embedded XML files, and displaying PDF metadata including attachments.
 
 ## Build Commands
 
@@ -19,6 +19,7 @@ Run the built executable directly:
 ./zig-out/bin/pdfzig render document.pdf
 ./zig-out/bin/pdfzig extract-text document.pdf
 ./zig-out/bin/pdfzig extract-images document.pdf ./output
+./zig-out/bin/pdfzig extract-xml document.pdf ./xml-output
 ./zig-out/bin/pdfzig info document.pdf
 ```
 
@@ -26,14 +27,15 @@ Run the built executable directly:
 
 ### Core Modules
 
-- **src/main.zig** - CLI entry point with subcommand parsing (render, extract-text, extract-images, info). Each command has its own argument struct and run function.
+- **src/main.zig** - CLI entry point with subcommand parsing (render, extract-text, extract-images, extract-xml, info). Each command has its own argument struct and run function.
 
 - **src/pdfium.zig** - Idiomatic Zig bindings for PDFium C API. Key types:
-  - `Document` - PDF document handle with metadata extraction
+  - `Document` - PDF document handle with metadata and attachment access
   - `Page` - Page handle with rendering and object iteration
   - `TextPage` - Text extraction with UTF-16LE to UTF-8 conversion
   - `Bitmap` - BGRA bitmap for rendering
   - `ImageObject` / `ImageObjectIterator` - Embedded image extraction
+  - `Attachment` / `AttachmentIterator` - Embedded file attachment access
 
 - **src/renderer.zig** - Rendering coordination with page range parsing ("1-5,8,10-12" syntax)
 

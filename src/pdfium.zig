@@ -7,6 +7,7 @@ const c = @cImport({
     @cInclude("fpdf_text.h");
     @cInclude("fpdf_doc.h");
     @cInclude("fpdf_edit.h");
+    @cInclude("fpdf_attachment.h");
 });
 
 // Page object types
@@ -234,6 +235,28 @@ pub const Document = struct {
             .mod_date = self.getMetaText(allocator, "ModDate"),
         };
     }
+
+    /// Get the number of embedded file attachments
+    pub fn getAttachmentCount(self: Document) u32 {
+        const count = c.FPDFDoc_GetAttachmentCount(self.handle);
+        return if (count < 0) 0 else @intCast(count);
+    }
+
+    /// Get an attachment by index (0-based)
+    pub fn getAttachment(self: Document, index: u32) ?Attachment {
+        const handle = c.FPDFDoc_GetAttachment(self.handle, @intCast(index));
+        if (handle == null) return null;
+        return .{ .handle = handle };
+    }
+
+    /// Iterator for attachments
+    pub fn attachments(self: Document) AttachmentIterator {
+        return .{
+            .document = self,
+            .index = 0,
+            .count = self.getAttachmentCount(),
+        };
+    }
 };
 
 /// A PDF page handle
@@ -443,6 +466,86 @@ pub const TextPage = struct {
     /// Get font size of a character at index (in points)
     pub fn getCharFontSize(self: TextPage, index: u32) f64 {
         return c.FPDFText_GetFontSize(self.handle, @intCast(index));
+    }
+};
+
+/// An embedded file attachment in a PDF
+pub const Attachment = struct {
+    handle: c.FPDF_ATTACHMENT,
+
+    /// Get the filename of the attachment
+    pub fn getName(self: Attachment, allocator: std.mem.Allocator) ?[]u8 {
+        // First call to get required buffer size
+        const required_len = c.FPDFAttachment_GetName(self.handle, null, 0);
+        if (required_len <= 2) return null; // Empty or just null terminator
+
+        // Allocate buffer for UTF-16LE data
+        const utf16_buf = allocator.alloc(u16, required_len / 2) catch return null;
+        defer allocator.free(utf16_buf);
+
+        _ = c.FPDFAttachment_GetName(self.handle, utf16_buf.ptr, required_len);
+
+        // Convert UTF-16LE to UTF-8 (exclude null terminator)
+        return utf16LeToUtf8(allocator, utf16_buf[0 .. utf16_buf.len - 1]);
+    }
+
+    /// Get the file data of the attachment
+    pub fn getData(self: Attachment, allocator: std.mem.Allocator) ?[]u8 {
+        // First call to get required buffer size
+        var out_buflen: c_ulong = 0;
+        if (c.FPDFAttachment_GetFile(self.handle, null, 0, &out_buflen) == 0) {
+            return null;
+        }
+        if (out_buflen == 0) return null;
+
+        // Allocate buffer and get data
+        const buffer = allocator.alloc(u8, out_buflen) catch return null;
+        errdefer allocator.free(buffer);
+
+        var actual_len: c_ulong = 0;
+        if (c.FPDFAttachment_GetFile(self.handle, buffer.ptr, out_buflen, &actual_len) == 0) {
+            allocator.free(buffer);
+            return null;
+        }
+
+        return buffer[0..actual_len];
+    }
+
+    /// Check if this attachment is an XML file (by extension)
+    pub fn isXml(self: Attachment, allocator: std.mem.Allocator) bool {
+        const name = self.getName(allocator) orelse return false;
+        defer allocator.free(name);
+
+        const lower_name = allocator.alloc(u8, name.len) catch return false;
+        defer allocator.free(lower_name);
+
+        for (name, 0..) |char, i| {
+            lower_name[i] = std.ascii.toLower(char);
+        }
+
+        return std.mem.endsWith(u8, lower_name, ".xml") or
+            std.mem.endsWith(u8, lower_name, ".xmp") or
+            std.mem.endsWith(u8, lower_name, ".xsd") or
+            std.mem.endsWith(u8, lower_name, ".xsl") or
+            std.mem.endsWith(u8, lower_name, ".xslt");
+    }
+};
+
+/// Iterator for document attachments
+pub const AttachmentIterator = struct {
+    document: Document,
+    index: u32,
+    count: u32,
+
+    pub fn next(self: *AttachmentIterator) ?Attachment {
+        if (self.index >= self.count) return null;
+        const attachment = self.document.getAttachment(self.index);
+        self.index += 1;
+        return attachment;
+    }
+
+    pub fn reset(self: *AttachmentIterator) void {
+        self.index = 0;
     }
 };
 
