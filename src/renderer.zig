@@ -170,7 +170,7 @@ pub fn renderDocument(
 }
 
 /// Extract basename (filename without extension) from a path
-fn getBasename(path: []const u8) []const u8 {
+pub fn getBasename(path: []const u8) []const u8 {
     // Find the last path separator
     const filename = if (std.mem.lastIndexOfAny(u8, path, "/\\")) |pos|
         path[pos + 1 ..]

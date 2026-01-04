@@ -163,9 +163,6 @@ pub const PdfiumLib = struct {
     FPDFText_SetText: *const fn (text_object: FPDF_PAGEOBJECT, text: FPDF_WIDESTRING) callconv(.c) FPDF_BOOL,
     FPDFPageObj_Transform: *const fn (page_object: FPDF_PAGEOBJECT, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) callconv(.c) void,
 
-    // Bitmap creation (for image insertion)
-    FPDFBitmap_Create: *const fn (width: c_int, height: c_int, alpha: c_int) callconv(.c) FPDF_BITMAP,
-
     /// Load PDFium library from a specific path
     pub fn load(path: []const u8) LoadError!PdfiumLib {
         var self: PdfiumLib = undefined;

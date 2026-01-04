@@ -136,11 +136,6 @@ pub fn deinit() void {
     }
 }
 
-/// Check if the library is loaded
-pub fn isLoaded() bool {
-    return lib != null;
-}
-
 /// Get the loaded library version (Chrome version number)
 pub fn getVersion() ?u32 {
     if (lib) |l| {

@@ -280,7 +280,7 @@ fn runRenderCommand(
     }
 
     // Get basename
-    const basename = getBasename(input_path);
+    const basename = renderer.getBasename(input_path);
 
     // Render pages
     var rendered_count: u32 = 0;
@@ -793,7 +793,7 @@ fn runExtractAttachmentsCommand(
     }
 }
 
-/// Simple glob pattern matching supporting * and ? wildcards
+/// Simple glob pattern matching supporting * and ? wildcards (case-insensitive)
 pub fn matchGlobPattern(pattern: []const u8, name: []const u8) bool {
     var p_idx: usize = 0;
     var n_idx: usize = 0;
@@ -2520,7 +2520,7 @@ fn runAttachCommand(
         var it = glob_results.iterate();
         while (it.next() catch null) |entry| {
             if (entry.kind != .file) continue;
-            if (matchGlob(pattern, entry.name)) {
+            if (matchGlobPattern(pattern, entry.name)) {
                 const path_copy = allocator.dupe(u8, entry.name) catch {
                     try stderr.writeAll("Error: Out of memory\n");
                     try stderr.flush();
@@ -2775,7 +2775,7 @@ fn runDetachCommand(
         while (it.next()) |att| {
             if (att.getName(allocator)) |name| {
                 defer allocator.free(name);
-                if (matchGlob(pattern, name)) {
+                if (matchGlobPattern(pattern, name)) {
                     // Add if not already in list
                     var found = false;
                     for (indices_to_delete.items) |existing| {
@@ -2834,36 +2834,6 @@ fn runDetachCommand(
     }
 }
 
-fn matchGlob(pattern: []const u8, name: []const u8) bool {
-    var pi: usize = 0;
-    var ni: usize = 0;
-    var star_pi: ?usize = null;
-    var star_ni: usize = 0;
-
-    while (ni < name.len) {
-        if (pi < pattern.len and (pattern[pi] == '?' or pattern[pi] == name[ni])) {
-            pi += 1;
-            ni += 1;
-        } else if (pi < pattern.len and pattern[pi] == '*') {
-            star_pi = pi;
-            star_ni = ni;
-            pi += 1;
-        } else if (star_pi) |sp| {
-            pi = sp + 1;
-            star_ni += 1;
-            ni = star_ni;
-        } else {
-            return false;
-        }
-    }
-
-    while (pi < pattern.len and pattern[pi] == '*') {
-        pi += 1;
-    }
-
-    return pi == pattern.len;
-}
-
 fn printDetachUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig detach [options] <input.pdf>
@@ -2912,18 +2882,6 @@ fn openDocument(path: []const u8, password: ?[]const u8, stderr: *std.Io.Writer)
             return null;
         };
     }
-}
-
-fn getBasename(path: []const u8) []const u8 {
-    const filename = if (std.mem.lastIndexOfAny(u8, path, "/\\")) |pos|
-        path[pos + 1 ..]
-    else
-        path;
-
-    return if (std.mem.lastIndexOfScalar(u8, filename, '.')) |pos|
-        filename[0..pos]
-    else
-        filename;
 }
 
 // ============================================================================
