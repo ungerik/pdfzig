@@ -10,8 +10,14 @@ A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
 - **Extract attachments** embedded in PDFs with glob pattern filtering
 - **Visual diff** - compare two PDFs visually, pixel by pixel
 - **Display info** including metadata, page count, encryption status, attachments, and PDF version
+- **Rotate** pages by 90, 180, or 270 degrees
+- **Delete** pages from PDFs
+- **Add** new pages with optional image or text content
+- **Attach** files as PDF attachments
+- **Detach** (remove) attachments from PDFs
 - Support for **password-protected** PDFs
 - **Multi-resolution output** - generate multiple image sizes in one pass
+- **Runtime PDFium linking** - download or link PDFium libraries dynamically
 
 ## Installation
 
@@ -165,6 +171,92 @@ Attachments: 2
   data.json
 
 XML files: 1 (use 'extract_attachments "*.xml"' to extract)
+```
+
+### Rotate Pages
+
+```bash
+# Rotate all pages 90 degrees clockwise
+pdfzig rotate document.pdf 90
+
+# Rotate specific pages 180 degrees
+pdfzig rotate -p 1,3,5 document.pdf 180
+
+# Rotate and save to a different file
+pdfzig rotate -o rotated.pdf document.pdf 270
+```
+
+Supported angles: `90`, `180`, `270` (clockwise)
+
+### Delete Pages
+
+```bash
+# Delete page 5
+pdfzig delete document.pdf 5
+
+# Delete pages 1, 3, and 5-10
+pdfzig delete document.pdf 1,3,5-10
+
+# Delete and save to a different file
+pdfzig delete -o trimmed.pdf document.pdf 1-3
+```
+
+### Add Pages
+
+```bash
+# Add an empty page at the end
+pdfzig add document.pdf
+
+# Add an empty page at position 3
+pdfzig add -n 3 document.pdf
+
+# Add a page with an image (scaled to fit)
+pdfzig add document.pdf image.png
+
+# Add a page with text content
+pdfzig add document.pdf notes.txt
+
+# Specify page size (default: same as previous page)
+pdfzig add -s 612x792 document.pdf
+```
+
+### Attach Files
+
+```bash
+# Attach a file to the PDF
+pdfzig attach document.pdf invoice.xml
+
+# Attach multiple files
+pdfzig attach document.pdf file1.json file2.xml
+
+# Attach files matching a glob pattern
+pdfzig attach -g "*.xml" document.pdf
+
+# Save to a different file
+pdfzig attach -o with_attachments.pdf document.pdf data.json
+```
+
+### Detach (Remove) Attachments
+
+```bash
+# Remove attachment by index
+pdfzig detach -i 0 document.pdf
+
+# Remove attachments matching a glob pattern
+pdfzig detach -g "*.xml" document.pdf
+
+# Save to a different file
+pdfzig detach -o clean.pdf -g "*.tmp" document.pdf
+```
+
+### Link PDFium Library
+
+```bash
+# Link a specific PDFium library file
+pdfzig link_pdfium /path/to/libpdfium.dylib -v 7606
+
+# Version is auto-detected from filename patterns like pdfium_v7606.dylib
+pdfzig link_pdfium /path/to/pdfium_v7606.dylib
 ```
 
 ### Password-Protected PDFs
