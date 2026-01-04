@@ -2,11 +2,11 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const cli = @import("../cli.zig");
-const json_text = @import("../json_text.zig");
+const cli_parsing = @import("../cli_parsing.zig");
+const json_text = @import("../text/formatting.zig");
 const main = @import("../main.zig");
 
-const PageSize = cli.PageSize;
+const PageSize = cli_parsing.PageSize;
 
 const Args = struct {
     input_path: ?[]const u8 = null,

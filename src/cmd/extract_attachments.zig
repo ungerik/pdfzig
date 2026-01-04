@@ -3,6 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
+const cli_parsing = @import("../cli_parsing.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -100,7 +101,7 @@ pub fn run(
 
         // Apply pattern filter if specified
         if (args.pattern) |pattern| {
-            if (!main.matchGlobPatternCaseInsensitive(pattern, std.fs.path.basename(name))) {
+            if (!cli_parsing.matchGlobPatternCaseInsensitive(pattern, std.fs.path.basename(name))) {
                 continue;
             }
         }

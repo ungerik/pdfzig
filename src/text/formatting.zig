@@ -5,8 +5,8 @@
 //! output of `extract_text --format json`.
 
 const std = @import("std");
-const pdfium = @import("pdfium/pdfium.zig");
-const renderer = @import("renderer.zig");
+const pdfium = @import("../pdfium/pdfium.zig");
+const renderer = @import("../renderer.zig");
 
 // ============================================================================
 // JSON Text Extraction

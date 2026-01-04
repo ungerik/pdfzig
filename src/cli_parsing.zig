@@ -1,6 +1,7 @@
 //! CLI argument parsing and types for pdfzig
 
 const std = @import("std");
+const glob = @import("glob");
 const image_writer = @import("image_writer.zig");
 
 /// Available commands
@@ -90,6 +91,26 @@ pub fn parseResolution(str: []const u8) ?f64 {
         str;
     if (num_str.len == 0) return null;
     return std.fmt.parseFloat(f64, num_str) catch null;
+}
+
+/// Simple glob pattern matching supporting * and ? wildcards (case-insensitive)
+pub fn matchGlobPatternCaseInsensitive(pattern: []const u8, name: []const u8) bool {
+    // Convert both to lowercase for case-insensitive matching
+    var pattern_lower: [256]u8 = undefined;
+    var name_lower: [256]u8 = undefined;
+
+    if (pattern.len > pattern_lower.len or name.len > name_lower.len) {
+        return false;
+    }
+
+    for (pattern, 0..) |c, i| {
+        pattern_lower[i] = std.ascii.toLower(c);
+    }
+    for (name, 0..) |c, i| {
+        name_lower[i] = std.ascii.toLower(c);
+    }
+
+    return glob.match(pattern_lower[0..pattern.len], name_lower[0..name.len]);
 }
 
 // ============================================================================

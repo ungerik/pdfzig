@@ -4,10 +4,10 @@ const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const renderer = @import("../renderer.zig");
 const image_writer = @import("../image_writer.zig");
-const cli = @import("../cli.zig");
+const cli_parsing = @import("../cli_parsing.zig");
 const main = @import("../main.zig");
 
-const OutputSpec = cli.OutputSpec;
+const OutputSpec = cli_parsing.OutputSpec;
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -49,7 +49,7 @@ pub fn run(
                     try stderr.flush();
                     std.process.exit(1);
                 };
-                const spec = cli.parseOutputSpec(spec_str) catch {
+                const spec = cli_parsing.parseOutputSpec(spec_str) catch {
                     try stderr.print("Error: Invalid output spec '{s}'\n", .{spec_str});
                     try stderr.flush();
                     std.process.exit(1);

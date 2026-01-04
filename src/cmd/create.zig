@@ -2,11 +2,11 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const cli = @import("../cli.zig");
-const json_text = @import("../json_text.zig");
+const cli_parsing = @import("../cli_parsing.zig");
+const json_text = @import("../text/formatting.zig");
 const main = @import("../main.zig");
 
-const PageSize = cli.PageSize;
+const PageSize = cli_parsing.PageSize;
 
 const Args = struct {
     output_path: ?[]const u8 = null,
@@ -98,7 +98,7 @@ pub fn run(
 
     // Process each source
     for (args.sources.items) |source| {
-        if (std.mem.eql(u8, source.path, cli.BLANK_PAGE)) {
+        if (std.mem.eql(u8, source.path, cli_parsing.BLANK_PAGE)) {
             // Add blank page
             var page = doc.createPage(pages_added, default_size.width, default_size.height) catch |err| {
                 try stderr.print("Error creating blank page: {}\n", .{err});

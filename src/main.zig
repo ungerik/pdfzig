@@ -20,15 +20,13 @@
 //!   --link <path>          Link a specific PDFium library
 
 const std = @import("std");
-const glob = @import("glob");
 const pdfium = @import("pdfium/pdfium.zig");
 const renderer = @import("renderer.zig");
 const image_writer = @import("image_writer.zig");
 const downloader = @import("pdfium/downloader.zig");
 const loader = @import("pdfium/loader.zig");
 const zigimg = @import("zigimg");
-const cli = @import("cli.zig");
-const json_text = @import("json_text.zig");
+const cli_parsing = @import("cli_parsing.zig");
 
 // Command modules
 const cmd_info = @import("cmd/info.zig");
@@ -48,11 +46,11 @@ const cmd_detach = @import("cmd/detach.zig");
 
 const version = "0.1.0";
 
-const Command = cli.Command;
-pub const SliceArgIterator = cli.SliceArgIterator;
-const PageSize = cli.PageSize;
-const OutputSpec = cli.OutputSpec;
-const parseResolution = cli.parseResolution;
+const Command = cli_parsing.Command;
+pub const SliceArgIterator = cli_parsing.SliceArgIterator;
+const PageSize = cli_parsing.PageSize;
+const OutputSpec = cli_parsing.OutputSpec;
+const parseResolution = cli_parsing.parseResolution;
 
 pub fn main() !void {
     // Use arena allocator - the app runs one command then exits,
@@ -291,26 +289,6 @@ pub fn parsePageList(
     }
 
     return pages.toOwnedSlice() catch unreachable;
-}
-
-/// Simple glob pattern matching supporting * and ? wildcards (case-insensitive)
-pub fn matchGlobPatternCaseInsensitive(pattern: []const u8, name: []const u8) bool {
-    // Convert both to lowercase for case-insensitive matching
-    var pattern_lower: [256]u8 = undefined;
-    var name_lower: [256]u8 = undefined;
-
-    if (pattern.len > pattern_lower.len or name.len > name_lower.len) {
-        return false;
-    }
-
-    for (pattern, 0..) |c, i| {
-        pattern_lower[i] = std.ascii.toLower(c);
-    }
-    for (name, 0..) |c, i| {
-        name_lower[i] = std.ascii.toLower(c);
-    }
-
-    return glob.match(pattern_lower[0..pattern.len], name_lower[0..name.len]);
 }
 
 // ============================================================================
@@ -631,5 +609,5 @@ test {
     _ = @import("cmd/extract_text.zig");
     _ = @import("renderer.zig");
     _ = @import("image_writer.zig");
-    _ = @import("json_text.zig");
+    _ = @import("text/formatting.zig");
 }

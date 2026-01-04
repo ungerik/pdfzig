@@ -3,6 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
+const cli_parsing = @import("../cli_parsing.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -70,7 +71,7 @@ pub fn run(
         var it = glob_results.iterate();
         while (it.next() catch null) |entry| {
             if (entry.kind != .file) continue;
-            if (main.matchGlobPatternCaseInsensitive(pattern, entry.name)) {
+            if (cli_parsing.matchGlobPatternCaseInsensitive(pattern, entry.name)) {
                 const path_copy = allocator.dupe(u8, entry.name) catch {
                     try stderr.writeAll("Error: Out of memory\n");
                     try stderr.flush();

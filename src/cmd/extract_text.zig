@@ -3,7 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const renderer = @import("../renderer.zig");
-const json_text = @import("../json_text.zig");
+const json_text = @import("../text/formatting.zig");
 const main = @import("../main.zig");
 
 pub const TextOutputFormat = enum {

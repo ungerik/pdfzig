@@ -2,11 +2,11 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const cli = @import("../cli.zig");
+const cli_parsing = @import("../cli_parsing.zig");
 const zigimg = @import("zigimg");
 const main = @import("../main.zig");
 
-const parseResolution = cli.parseResolution;
+const parseResolution = cli_parsing.parseResolution;
 
 /// Color mode for diff output images
 pub const ColorMode = enum {

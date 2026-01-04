@@ -3,6 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
+const cli_parsing = @import("../cli_parsing.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -126,7 +127,7 @@ pub fn run(
         while (it.next()) |att| {
             if (att.getName(allocator)) |name| {
                 defer allocator.free(name);
-                if (main.matchGlobPatternCaseInsensitive(pattern, name)) {
+                if (cli_parsing.matchGlobPatternCaseInsensitive(pattern, name)) {
                     // Add if not already in list
                     var found = false;
                     for (indices_to_delete.items) |existing| {
