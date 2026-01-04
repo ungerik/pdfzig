@@ -780,6 +780,12 @@ pub const PageObject = struct {
         const l = lib orelse return false;
         return l.FPDFText_SetText(self.handle, text_utf16.ptr) != 0;
     }
+
+    /// Set fill color for a page object (used for text color)
+    pub fn setFillColor(self: PageObject, r: u8, g: u8, b: u8, a: u8) bool {
+        const l = lib orelse return false;
+        return l.FPDFPageObj_SetFillColor(self.handle, r, g, b, a) != 0;
+    }
 };
 
 /// An image object on a page

@@ -286,6 +286,9 @@ pdfzig add document.pdf image.png
 # Add a page with text content
 pdfzig add document.pdf notes.txt
 
+# Add a page with formatted text from JSON (same format as extract_text --format json)
+pdfzig add document.pdf content.json
+
 # Specify page size using standard names
 pdfzig add -s A4 document.pdf
 pdfzig add -s Letter document.pdf
@@ -330,7 +333,26 @@ Source types:
 - **PDF files**: Import pages (all pages or use `-p` for specific pages)
 - **Images**: PNG, JPEG, BMP - creates a page with the image scaled to fit
 - **Text files**: Creates a page with the text content
+- **JSON files**: Creates pages with formatted text blocks (same format as `extract_text --format json`)
 - **`:blank`**: Inserts a blank page
+
+#### Standard PDF Fonts
+
+When using JSON files for text input, fonts are mapped to the PDF Standard Base 14 Fonts which are guaranteed to be available in all PDF viewers:
+
+| Font Family  | Variants                               |
+|--------------|----------------------------------------|
+| Helvetica    | Regular, Bold, Oblique, Bold-Oblique   |
+| Courier      | Regular, Bold, Oblique, Bold-Oblique   |
+| Times        | Roman, Bold, Italic, Bold-Italic       |
+| Symbol       | Regular                                |
+| ZapfDingbats | Regular                                |
+
+Font names in JSON are matched using these rules:
+- Names containing "Courier" or "Mono" → Courier
+- Names containing "Times" or "Serif" → Times
+- All other names → Helvetica (default sans-serif)
+- Bold/Italic variants are selected based on `weight` (≥600) and `italic` fields
 
 ### Attach Files
 
@@ -481,21 +503,21 @@ zig build -Dtarget=x86_64-linux-gnu -Ddownload-pdfium
 
 The following commands need integration tests with reference PDF files:
 
-| Command              | Tests Needed                                                          |
-|----------------------|-----------------------------------------------------------------------|
-| `render`             | Render pages to PNG/JPEG, verify output dimensions and format         |
-| `extract_text`       | Extract text, verify content matches expected output                  |
-| `extract_images`     | Extract embedded images, verify count and format                      |
-| `visual_diff`        | Compare identical/different PDFs, verify diff detection               |
-| `rotate`             | Rotate pages, verify rotation persists after save                     |
-| `mirror`             | Mirror pages horizontally/vertically, verify transformation           |
-| `delete`             | Delete pages, verify page count and remaining content                 |
-| `add`                | Add blank/image/text pages, verify insertion                          |
-| `create`             | Create from multiple sources, verify page import and ordering         |
-| `attach`             | Add attachments, verify attachment count and content                  |
-| `detach`             | Remove attachments, verify removal                                    |
-| `pdfium.Document`    | Open/close, importPages, createNew, save operations                   |
-| `extract_text --format json` | Verify JSON output structure, text blocks, formatting info     |
+| Command                      | Tests Needed                                              |
+|------------------------------|-----------------------------------------------------------|
+| `render`                     | Render pages to PNG/JPEG, verify output dimensions/format |
+| `extract_text`               | Extract text, verify content matches expected output      |
+| `extract_images`             | Extract embedded images, verify count and format          |
+| `visual_diff`                | Compare identical/different PDFs, verify diff detection   |
+| `rotate`                     | Rotate pages, verify rotation persists after save         |
+| `mirror`                     | Mirror pages horizontally/vertically, verify transform    |
+| `delete`                     | Delete pages, verify page count and remaining content     |
+| `add`                        | Add blank/image/text pages, verify insertion              |
+| `create`                     | Create from multiple sources, verify page import/ordering |
+| `attach`                     | Add attachments, verify attachment count and content      |
+| `detach`                     | Remove attachments, verify removal                        |
+| `pdfium.Document`            | Open/close, importPages, createNew, save operations       |
+| `extract_text --format json` | Verify JSON output structure, text blocks, formatting     |
 
 Reference PDF files needed:
 - Simple single-page PDF

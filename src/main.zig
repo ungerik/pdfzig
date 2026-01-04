@@ -27,6 +27,7 @@ const downloader = @import("downloader.zig");
 const loader = @import("pdfium_loader.zig");
 const zigimg = @import("zigimg");
 const cli = @import("cli.zig");
+const json_text = @import("json_text.zig");
 
 const version = "0.1.0";
 
@@ -599,227 +600,11 @@ fn runExtractTextCommand(
             }
         },
         .json => {
-            try extractTextAsJson(allocator, &doc, page_count, page_ranges, output);
+            try json_text.extractTextAsJson(allocator, &doc, page_count, page_ranges, output);
         },
     }
 
     try output.flush();
-}
-
-/// Text block with formatting information
-const TextBlock = struct {
-    text: std.array_list.Managed(u8),
-    bbox: struct { left: f64, top: f64, right: f64, bottom: f64 },
-    font_name: ?[]const u8,
-    font_size: f64,
-    font_weight: i32,
-    is_italic: bool,
-    color: struct { r: u8, g: u8, b: u8, a: u8 },
-};
-
-fn extractTextAsJson(
-    allocator: std.mem.Allocator,
-    doc: *pdfium.Document,
-    page_count: u32,
-    page_ranges: ?[]renderer.PageRange,
-    output: *std.Io.Writer,
-) !void {
-    try output.writeAll("{\"pages\":[");
-
-    var first_page = true;
-    for (1..page_count + 1) |i| {
-        const page_num: u32 = @intCast(i);
-
-        if (page_ranges) |ranges| {
-            if (!renderer.isPageInRanges(page_num, ranges)) continue;
-        }
-
-        var page = doc.loadPage(page_num - 1) catch continue;
-        defer page.close();
-
-        var text_page = page.loadTextPage() orelse continue;
-        defer text_page.close();
-
-        if (!first_page) try output.writeAll(",");
-        first_page = false;
-
-        try output.print("{{\"page\":{d},\"width\":{d:.2},\"height\":{d:.2},\"blocks\":[", .{
-            page_num,
-            page.getWidth(),
-            page.getHeight(),
-        });
-
-        // Extract text blocks
-        try extractPageBlocks(allocator, &text_page, output);
-
-        try output.writeAll("]}");
-    }
-
-    try output.writeAll("]}\n");
-}
-
-fn extractPageBlocks(
-    allocator: std.mem.Allocator,
-    text_page: *pdfium.TextPage,
-    output: *std.Io.Writer,
-) !void {
-    const char_count = text_page.getCharCount();
-    if (char_count == 0) return;
-
-    // Arena allocator handles all cleanup
-    var blocks = std.array_list.Managed(TextBlock).init(allocator);
-
-    var current_block: ?TextBlock = null;
-
-    var prev_font_size: f64 = 0;
-    var prev_font_weight: i32 = 0;
-    var prev_is_italic: bool = false;
-    var prev_color: pdfium.TextPage.Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
-    var prev_y: f64 = 0;
-
-    for (0..char_count) |idx| {
-        const index: u32 = @intCast(idx);
-        const unicode = text_page.getCharUnicode(index);
-
-        // Skip control characters except space/newline
-        if (unicode < 32 and unicode != 32 and unicode != 10 and unicode != 13) continue;
-
-        // Get character properties
-        const box = text_page.getCharBox(index) orelse continue;
-        const font_size = text_page.getCharFontSize(index);
-        const font_weight = text_page.getCharFontWeight(index);
-        const color = text_page.getCharFillColor(index) orelse pdfium.TextPage.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
-
-        var is_italic = false;
-        if (text_page.getCharFontInfo(allocator, index)) |info| {
-            is_italic = info.flags.isItalic();
-            // Arena allocator handles cleanup
-        }
-
-        // Check if we need to start a new block
-        const y_diff = @abs(box.top - prev_y);
-        const is_new_line = prev_y != 0 and y_diff > font_size * 0.5;
-        const size_changed = @abs(font_size - prev_font_size) > 0.5;
-        const weight_changed = prev_font_weight != font_weight;
-        const italic_changed = prev_is_italic != is_italic;
-        const color_changed = prev_color.r != color.r or prev_color.g != color.g or
-            prev_color.b != color.b or prev_color.a != color.a;
-
-        const needs_new_block = current_block == null or is_new_line or
-            size_changed or weight_changed or italic_changed or color_changed;
-
-        if (needs_new_block) {
-            // Save current block if any
-            if (current_block) |*block| {
-                try blocks.append(block.*);
-                current_block = null;
-            }
-
-            // Get font name for this block
-            var block_font_name: ?[]u8 = null;
-            if (text_page.getCharFontInfo(allocator, index)) |info| {
-                block_font_name = info.name;
-            }
-
-            const new_block = TextBlock{
-                .text = std.array_list.Managed(u8).init(allocator),
-                .bbox = .{ .left = box.left, .top = box.top, .right = box.right, .bottom = box.bottom },
-                .font_name = block_font_name,
-                .font_size = font_size,
-                .font_weight = font_weight,
-                .is_italic = is_italic,
-                .color = .{ .r = color.r, .g = color.g, .b = color.b, .a = color.a },
-            };
-            current_block = new_block;
-        }
-
-        // Add character to current block
-        if (current_block) |*block| {
-            // Encode unicode to UTF-8
-            var utf8_buf: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(@intCast(unicode), &utf8_buf) catch continue;
-            try block.text.appendSlice(utf8_buf[0..len]);
-
-            // Expand bounding box
-            block.bbox.left = @min(block.bbox.left, box.left);
-            block.bbox.right = @max(block.bbox.right, box.right);
-            block.bbox.top = @max(block.bbox.top, box.top);
-            block.bbox.bottom = @min(block.bbox.bottom, box.bottom);
-        }
-
-        prev_font_size = font_size;
-        prev_font_weight = font_weight;
-        prev_is_italic = is_italic;
-        prev_color = color;
-        prev_y = box.top;
-    }
-
-    // Save last block
-    if (current_block) |*block| {
-        try blocks.append(block.*);
-    }
-
-    // Output blocks as JSON
-    for (blocks.items, 0..) |block, idx| {
-        if (idx > 0) try output.writeAll(",");
-
-        try output.writeAll("{\"text\":\"");
-        // Escape JSON string
-        for (block.text.items) |c| {
-            switch (c) {
-                '"' => try output.writeAll("\\\""),
-                '\\' => try output.writeAll("\\\\"),
-                '\n' => try output.writeAll("\\n"),
-                '\r' => try output.writeAll("\\r"),
-                '\t' => try output.writeAll("\\t"),
-                else => {
-                    if (c < 32) {
-                        try output.print("\\u{x:0>4}", .{c});
-                    } else {
-                        try output.writeByte(c);
-                    }
-                },
-            }
-        }
-        try output.writeAll("\",");
-
-        try output.print("\"bbox\":{{\"left\":{d:.2},\"top\":{d:.2},\"right\":{d:.2},\"bottom\":{d:.2}}},", .{
-            block.bbox.left,
-            block.bbox.top,
-            block.bbox.right,
-            block.bbox.bottom,
-        });
-
-        if (block.font_name) |name| {
-            try output.writeAll("\"font\":\"");
-            try output.writeAll(name);
-            try output.writeAll("\",");
-        } else {
-            try output.writeAll("\"font\":null,");
-        }
-
-        try output.print("\"size\":{d:.1},\"weight\":{d},\"italic\":{},", .{
-            block.font_size,
-            block.font_weight,
-            block.is_italic,
-        });
-
-        // Output color as CSS-compatible hex (include alpha only if not fully opaque)
-        if (block.color.a == 255) {
-            try output.print("\"color\":\"#{x:0>2}{x:0>2}{x:0>2}\"}}", .{
-                block.color.r,
-                block.color.g,
-                block.color.b,
-            });
-        } else {
-            try output.print("\"color\":\"#{x:0>2}{x:0>2}{x:0>2}{x:0>2}\"}}", .{
-                block.color.r,
-                block.color.g,
-                block.color.b,
-                block.color.a,
-            });
-        }
-    }
 }
 
 // ============================================================================
@@ -2463,8 +2248,12 @@ fn runAddCommand(
     if (args.content_file) |content_path| {
         const ext = std.fs.path.extension(content_path);
         const is_text = std.mem.eql(u8, ext, ".txt") or std.mem.eql(u8, ext, ".text");
+        const is_json = std.mem.eql(u8, ext, ".json");
 
-        if (is_text) {
+        if (is_json) {
+            // Handle JSON file with formatted text blocks
+            try json_text.addJsonToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
+        } else if (is_text) {
             // Handle text file
             try addTextToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
         } else {
@@ -2929,6 +2718,24 @@ fn runCreateCommand(
                     pages_added += src_page_count;
                     try stdout.print("Imported {d} pages from: {s}\n", .{ src_page_count, std.fs.path.basename(source.path) });
                 }
+            } else if (std.mem.eql(u8, ext_lower, ".json")) {
+                // Add page with formatted text from JSON
+                var page = doc.createPage(pages_added, default_size.width, default_size.height) catch |err| {
+                    try stderr.print("Error creating page: {}\n", .{err});
+                    try stderr.flush();
+                    std.process.exit(1);
+                };
+                defer page.close();
+
+                try json_text.addJsonToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
+
+                if (!page.generateContent()) {
+                    try stderr.writeAll("Error generating page content\n");
+                    try stderr.flush();
+                    std.process.exit(1);
+                }
+                pages_added += 1;
+                try stdout.print("Added page with formatted text from: {s}\n", .{std.fs.path.basename(source.path)});
             } else if (std.mem.eql(u8, ext_lower, ".txt") or std.mem.eql(u8, ext_lower, ".text")) {
                 // Add page with text content
                 var page = doc.createPage(pages_added, default_size.width, default_size.height) catch |err| {
@@ -3691,4 +3498,5 @@ test {
     _ = @import("attachments_test.zig");
     _ = @import("renderer.zig");
     _ = @import("image_writer.zig");
+    _ = @import("json_text.zig");
 }

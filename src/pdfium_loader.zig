@@ -167,6 +167,7 @@ pub const PdfiumLib = struct {
     FPDFPageObj_NewTextObj: *const fn (document: FPDF_DOCUMENT, font: FPDF_BYTESTRING, font_size: f32) callconv(.c) FPDF_PAGEOBJECT,
     FPDFText_SetText: *const fn (text_object: FPDF_PAGEOBJECT, text: FPDF_WIDESTRING) callconv(.c) FPDF_BOOL,
     FPDFPageObj_Transform: *const fn (page_object: FPDF_PAGEOBJECT, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) callconv(.c) void,
+    FPDFPageObj_SetFillColor: *const fn (page_object: FPDF_PAGEOBJECT, R: c_uint, G: c_uint, B: c_uint, A: c_uint) callconv(.c) FPDF_BOOL,
 
     // Document creation and page import functions
     FPDF_CreateNewDocument: *const fn () callconv(.c) FPDF_DOCUMENT,
