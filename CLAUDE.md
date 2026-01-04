@@ -33,14 +33,14 @@ Run the built executable directly:
 ./zig-out/bin/pdfzig add document.pdf image.png         # Add page with image
 ./zig-out/bin/pdfzig attach document.pdf file.xml       # Attach file to PDF
 ./zig-out/bin/pdfzig detach -i 0 document.pdf           # Remove first attachment
-./zig-out/bin/pdfzig link_pdfium /path/to/lib -v 7606   # Link specific PDFium library
+./zig-out/bin/pdfzig -link /path/to/libpdfium.dylib info doc.pdf  # Use specific PDFium library
 ```
 
 ## Architecture
 
 ### Core Modules
 
-- **src/main.zig** - CLI entry point with subcommand parsing (render, extract_text, extract_images, extract_attachments, visual_diff, info, rotate, delete, add, attach, detach, link_pdfium, download_pdfium). Each command has its own argument struct and run function.
+- **src/main.zig** - CLI entry point with subcommand parsing (render, extract_text, extract_images, extract_attachments, visual_diff, info, rotate, delete, add, attach, detach, download_pdfium). Each command has its own argument struct and run function. Global option `-link <path>` loads PDFium from a specific path (version parsed from filename pattern `libpdfium_v{VERSION}.ext`).
 
 - **src/pdfium.zig** - Idiomatic Zig bindings for PDFium. Key types:
   - `Document` - PDF document handle with metadata, attachment access, page deletion, and save functionality
@@ -95,3 +95,7 @@ Run the built executable directly:
 - Zig 0.15 uses `.c` calling convention (not `.C`)
 - Uses `std.Io.Writer` and `std.Io.Reader` (new Zig 0.15 I/O interfaces)
 - Uses `std.array_list.Managed(T).init(allocator)` (not `std.ArrayList(T).init(allocator)` which was deprecated in Zig 0.15)
+
+## Change Rules
+
+- When a command is changed or added, update README.md and CLAUDE.md

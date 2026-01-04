@@ -76,6 +76,16 @@ pub fn init() Error!void {
     return initWithAllocator(std.heap.page_allocator);
 }
 
+/// Initialize from a specific library path
+pub fn initWithPath(path: []const u8) Error!void {
+    if (lib != null) return; // Already initialized
+
+    lib = loader.PdfiumLib.load(path) catch {
+        return Error.LibraryLoadFailed;
+    };
+    lib.?.FPDF_InitLibrary();
+}
+
 /// Initialize with a specific allocator
 pub fn initWithAllocator(allocator: std.mem.Allocator) Error!void {
     if (lib != null) return; // Already initialized

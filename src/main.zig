@@ -7,7 +7,15 @@
 //!   extract_attachments Extract embedded attachments from PDF
 //!   visual_diff         Compare two PDFs visually
 //!   info                Display PDF metadata and information
+//!   rotate              Rotate PDF pages
+//!   delete              Delete PDF pages
+//!   add                 Add new page to PDF
+//!   attach              Attach files to PDF
+//!   detach              Remove attachments from PDF
 //!   download_pdfium     Download PDFium library
+//!
+//! Global Options:
+//!   -link <path>           Link a specific PDFium library
 
 const std = @import("std");
 const pdfium = @import("pdfium.zig");
@@ -31,7 +39,6 @@ const Command = enum {
     add,
     attach,
     detach,
-    link_pdfium,
     download_pdfium,
     help,
     version_cmd,
@@ -50,20 +57,72 @@ pub fn main() !void {
     const stdout = &stdout_writer.interface;
     const stderr = &stderr_writer.interface;
 
+    // Collect all arguments into a list for multi-pass parsing
+    var args_list = std.array_list.Managed([]const u8).init(allocator);
+    defer args_list.deinit();
+
     var arg_it = std.process.args();
     _ = arg_it.skip(); // Skip program name
+    while (arg_it.next()) |arg| {
+        args_list.append(arg) catch {
+            try stderr.writeAll("Error: Out of memory\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
 
-    const command_str = arg_it.next() orelse {
+    // Parse global options first
+    var link_library_path: ?[]const u8 = null;
+    var remaining_args = std.array_list.Managed([]const u8).init(allocator);
+    defer remaining_args.deinit();
+
+    var i: usize = 0;
+    while (i < args_list.items.len) : (i += 1) {
+        const arg = args_list.items[i];
+        if (std.mem.eql(u8, arg, "-link") or std.mem.eql(u8, arg, "--link")) {
+            i += 1;
+            if (i >= args_list.items.len) {
+                try stderr.writeAll("Error: -link requires a library path argument\n");
+                try stderr.flush();
+                std.process.exit(1);
+            }
+            link_library_path = args_list.items[i];
+        } else {
+            remaining_args.append(arg) catch {
+                try stderr.writeAll("Error: Out of memory\n");
+                try stderr.flush();
+                std.process.exit(1);
+            };
+        }
+    }
+
+    // Handle -link option - initialize PDFium from specified path
+    if (link_library_path) |library_path| {
+        pdfium.initWithPath(library_path) catch |err| {
+            try stderr.print("Error: Failed to load PDFium library from '{s}': {}\n", .{ library_path, err });
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        try stdout.print("Loaded PDFium from: {s}\n", .{library_path});
+        try stdout.flush();
+    }
+
+    // Now parse the command from remaining args
+    const command_str = if (remaining_args.items.len > 0) remaining_args.items[0] else null;
+
+    if (command_str == null) {
         // Try to load PDFium to show version in help
         pdfium.init() catch {};
         defer pdfium.deinit();
         printMainUsage(stdout, pdfium.getVersion());
         try stdout.flush();
         return;
-    };
+    }
 
-    // Check for global flags first
-    if (std.mem.eql(u8, command_str, "-h") or std.mem.eql(u8, command_str, "--help") or std.mem.eql(u8, command_str, "help")) {
+    const cmd_str = command_str.?;
+
+    // Check for global flags
+    if (std.mem.eql(u8, cmd_str, "-h") or std.mem.eql(u8, cmd_str, "--help") or std.mem.eql(u8, cmd_str, "help")) {
         pdfium.init() catch {};
         defer pdfium.deinit();
         printMainUsage(stdout, pdfium.getVersion());
@@ -71,40 +130,38 @@ pub fn main() !void {
         return;
     }
 
-    if (std.mem.eql(u8, command_str, "-v") or std.mem.eql(u8, command_str, "--version") or std.mem.eql(u8, command_str, "version")) {
+    if (std.mem.eql(u8, cmd_str, "-v") or std.mem.eql(u8, cmd_str, "--version") or std.mem.eql(u8, cmd_str, "version")) {
         try stdout.print("pdfzig {s}\n", .{version});
         try stdout.flush();
         return;
     }
 
-    const command: Command = if (std.mem.eql(u8, command_str, "render"))
+    const command: Command = if (std.mem.eql(u8, cmd_str, "render"))
         .render
-    else if (std.mem.eql(u8, command_str, "extract_text"))
+    else if (std.mem.eql(u8, cmd_str, "extract_text"))
         .extract_text
-    else if (std.mem.eql(u8, command_str, "extract_images"))
+    else if (std.mem.eql(u8, cmd_str, "extract_images"))
         .extract_images
-    else if (std.mem.eql(u8, command_str, "extract_attachments"))
+    else if (std.mem.eql(u8, cmd_str, "extract_attachments"))
         .extract_attachments
-    else if (std.mem.eql(u8, command_str, "visual_diff"))
+    else if (std.mem.eql(u8, cmd_str, "visual_diff"))
         .visual_diff
-    else if (std.mem.eql(u8, command_str, "info"))
+    else if (std.mem.eql(u8, cmd_str, "info"))
         .info
-    else if (std.mem.eql(u8, command_str, "rotate"))
+    else if (std.mem.eql(u8, cmd_str, "rotate"))
         .rotate
-    else if (std.mem.eql(u8, command_str, "delete"))
+    else if (std.mem.eql(u8, cmd_str, "delete"))
         .delete
-    else if (std.mem.eql(u8, command_str, "add"))
+    else if (std.mem.eql(u8, cmd_str, "add"))
         .add
-    else if (std.mem.eql(u8, command_str, "attach"))
+    else if (std.mem.eql(u8, cmd_str, "attach"))
         .attach
-    else if (std.mem.eql(u8, command_str, "detach"))
+    else if (std.mem.eql(u8, cmd_str, "detach"))
         .detach
-    else if (std.mem.eql(u8, command_str, "link_pdfium"))
-        .link_pdfium
-    else if (std.mem.eql(u8, command_str, "download_pdfium"))
+    else if (std.mem.eql(u8, cmd_str, "download_pdfium"))
         .download_pdfium
     else {
-        try stderr.print("Unknown command: {s}\n\n", .{command_str});
+        try stderr.print("Unknown command: {s}\n\n", .{cmd_str});
         try stderr.flush();
         pdfium.init() catch {};
         defer pdfium.deinit();
@@ -113,14 +170,12 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
-    // Handle link_pdfium and download_pdfium commands separately (manage PDFium library)
-    if (command == .link_pdfium) {
-        runLinkPdfiumCommand(allocator, &arg_it, stdout, stderr);
-        try stdout.flush();
-        return;
-    }
+    // Create an iterator over remaining args (skip command name)
+    var cmd_arg_it = SliceArgIterator.init(remaining_args.items[1..]);
+
+    // Handle download_pdfium command separately (manages PDFium library)
     if (command == .download_pdfium) {
-        runDownloadPdfiumCommand(allocator, &arg_it, stdout, stderr);
+        runDownloadPdfiumCommand(allocator, &cmd_arg_it, stdout, stderr);
         try stdout.flush();
         return;
     }
@@ -135,18 +190,17 @@ pub fn main() !void {
     defer pdfium.deinit();
 
     switch (command) {
-        .render => try runRenderCommand(allocator, &arg_it, stdout, stderr),
-        .extract_text => try runExtractTextCommand(allocator, &arg_it, stdout, stderr),
-        .extract_images => try runExtractImagesCommand(allocator, &arg_it, stdout, stderr),
-        .extract_attachments => try runExtractAttachmentsCommand(allocator, &arg_it, stdout, stderr),
-        .visual_diff => runVisualDiffCommand(allocator, &arg_it, stdout, stderr),
-        .info => try runInfoCommand(allocator, &arg_it, stdout, stderr),
-        .rotate => try runRotateCommand(allocator, &arg_it, stdout, stderr),
-        .delete => try runDeleteCommand(allocator, &arg_it, stdout, stderr),
-        .add => try runAddCommand(allocator, &arg_it, stdout, stderr),
-        .attach => try runAttachCommand(allocator, &arg_it, stdout, stderr),
-        .detach => try runDetachCommand(allocator, &arg_it, stdout, stderr),
-        .link_pdfium => unreachable, // Handled above
+        .render => try runRenderCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .extract_text => try runExtractTextCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .extract_images => try runExtractImagesCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .extract_attachments => try runExtractAttachmentsCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .visual_diff => runVisualDiffCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .info => try runInfoCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .rotate => try runRotateCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .delete => try runDeleteCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .add => try runAddCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .attach => try runAttachCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .detach => try runDetachCommand(allocator, &cmd_arg_it, stdout, stderr),
         .download_pdfium => unreachable, // Handled above
         .help => printMainUsage(stdout, pdfium.getVersion()),
         .version_cmd => try stdout.print("pdfzig {s}\n", .{version}),
@@ -154,6 +208,29 @@ pub fn main() !void {
 
     try stdout.flush();
 }
+
+/// Simple slice-based argument iterator to replace std.process.ArgIterator
+const SliceArgIterator = struct {
+    args: []const []const u8,
+    index: usize,
+
+    pub fn init(args: []const []const u8) SliceArgIterator {
+        return .{ .args = args, .index = 0 };
+    }
+
+    pub fn next(self: *SliceArgIterator) ?[]const u8 {
+        if (self.index >= self.args.len) return null;
+        const arg = self.args[self.index];
+        self.index += 1;
+        return arg;
+    }
+
+    pub fn skip(self: *SliceArgIterator) bool {
+        if (self.index >= self.args.len) return false;
+        self.index += 1;
+        return true;
+    }
+};
 
 // ============================================================================
 // Render Command
@@ -178,7 +255,7 @@ const OutputSpec = struct {
 
 fn runRenderCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -381,7 +458,7 @@ const ExtractTextArgs = struct {
 
 fn runExtractTextCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -500,7 +577,7 @@ const ExtractImagesArgs = struct {
 
 fn runExtractImagesCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -658,7 +735,7 @@ const ExtractAttachmentsArgs = struct {
 
 fn runExtractAttachmentsCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -854,7 +931,7 @@ const VisualDiffArgs = struct {
 
 fn runVisualDiffCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) void {
@@ -1170,7 +1247,7 @@ fn displayProgress(downloaded: u64, total: ?u64) void {
 
 fn runDownloadPdfiumCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) void {
@@ -1235,174 +1312,12 @@ fn runDownloadPdfiumCommand(
 }
 
 // ============================================================================
-// Link PDFium Command
-// ============================================================================
-
-const LinkPdfiumArgs = struct {
-    library_path: ?[]const u8 = null,
-    version: ?u32 = null,
-    show_help: bool = false,
-};
-
-fn runLinkPdfiumCommand(
-    allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
-) void {
-    var args = LinkPdfiumArgs{};
-
-    while (arg_it.next()) |arg| {
-        if (std.mem.startsWith(u8, arg, "-")) {
-            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-                args.show_help = true;
-            } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
-                const ver_str = arg_it.next() orelse {
-                    stderr.writeAll("Error: -v/--version requires a version number\n") catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
-                };
-                args.version = std.fmt.parseInt(u32, ver_str, 10) catch {
-                    stderr.print("Error: Invalid version number '{s}'\n", .{ver_str}) catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
-                };
-            } else {
-                stderr.print("Unknown option: {s}\n", .{arg}) catch {};
-                stderr.flush() catch {};
-                std.process.exit(1);
-            }
-        } else {
-            args.library_path = arg;
-        }
-    }
-
-    if (args.show_help) {
-        printLinkPdfiumUsage(stdout);
-        stdout.flush() catch {};
-        return;
-    }
-
-    const library_path = args.library_path orelse {
-        stderr.writeAll("Error: No library path specified\n\n") catch {};
-        stderr.flush() catch {};
-        printLinkPdfiumUsage(stderr);
-        stderr.flush() catch {};
-        std.process.exit(1);
-    };
-
-    // Get the executable directory
-    const exe_dir = loader.getExecutableDir(allocator) catch |err| {
-        stderr.print("Error: Could not determine executable directory: {}\n", .{err}) catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
-    };
-    defer allocator.free(exe_dir);
-
-    // Show currently linked version
-    if (loader.findBestPdfiumLibrary(allocator, exe_dir) catch null) |lib_info| {
-        defer allocator.free(lib_info.path);
-        stdout.print("Currently linked: PDFium v{d}\n", .{lib_info.version}) catch {};
-        stdout.print("  Path: {s}\n", .{lib_info.path}) catch {};
-    } else {
-        stdout.writeAll("Currently linked: none\n") catch {};
-    }
-    stdout.flush() catch {};
-
-    // Determine version - use provided version, or try to extract from filename
-    const lib_version = args.version orelse blk: {
-        const basename = std.fs.path.basename(library_path);
-        // Try to extract version from pdfium_v{version} pattern
-        if (std.mem.indexOf(u8, basename, "pdfium_v")) |_| {
-            break :blk loader.extractVersionFromPath(library_path);
-        }
-        // Try to extract version from chromium/{version} in path
-        if (std.mem.indexOf(u8, library_path, "chromium/")) |pos| {
-            const after_chromium = library_path[pos + 9 ..];
-            var end: usize = 0;
-            while (end < after_chromium.len and std.ascii.isDigit(after_chromium[end])) {
-                end += 1;
-            }
-            if (end > 0) {
-                break :blk std.fmt.parseInt(u32, after_chromium[0..end], 10) catch null;
-            }
-        }
-        break :blk null;
-    };
-
-    if (lib_version == null) {
-        stderr.writeAll("Error: Could not determine PDFium version from path.\n") catch {};
-        stderr.writeAll("Use -v/--version to specify the version number.\n") catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
-    }
-
-    const ver = lib_version.?;
-
-    // Build the destination filename
-    const dest_filename = loader.buildLibraryFilename(allocator, ver) catch {
-        stderr.writeAll("Error: Could not build destination filename\n") catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
-    };
-    defer allocator.free(dest_filename);
-
-    const dest_path = std.fs.path.join(allocator, &.{ exe_dir, dest_filename }) catch {
-        stderr.writeAll("Error: Could not build destination path\n") catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
-    };
-    defer allocator.free(dest_path);
-
-    // Copy the library file
-    stdout.print("\nLinking PDFium v{d}...\n", .{ver}) catch {};
-    stdout.flush() catch {};
-
-    std.fs.copyFileAbsolute(library_path, dest_path, .{}) catch |err| {
-        stderr.print("Error: Could not copy library file: {}\n", .{err}) catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
-    };
-
-    stdout.print("Library copied to: {s}\n", .{dest_path}) catch {};
-
-    // Verify by loading the library
-    if (loader.findBestPdfiumLibrary(allocator, exe_dir) catch null) |lib_info| {
-        defer allocator.free(lib_info.path);
-        stdout.print("\nNow linked: PDFium v{d}\n", .{lib_info.version}) catch {};
-    }
-}
-
-fn printLinkPdfiumUsage(out: *std.Io.Writer) void {
-    out.writeAll(
-        \\Usage: pdfzig link_pdfium [options] <library_path>
-        \\
-        \\Copy a PDFium shared library to the pdfzig directory for use.
-        \\
-        \\Arguments:
-        \\  library_path         Path to the PDFium shared library file
-        \\
-        \\Options:
-        \\  -v, --version <NUM>  Specify the PDFium/Chrome version number
-        \\  -h, --help           Show this help message
-        \\
-        \\The library will be renamed to pdfium_v{version}.{ext} in the
-        \\executable directory. If no version is specified, it will be
-        \\extracted from the path (e.g., pdfium_v7606.dylib or chromium/7606/).
-        \\
-        \\Example:
-        \\  pdfzig link_pdfium /path/to/libpdfium.dylib -v 7606
-        \\
-    ) catch {};
-}
-
-// ============================================================================
 // Info Command
 // ============================================================================
 
 fn runInfoCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -1544,7 +1459,7 @@ const RotateArgs = struct {
 
 fn runRotateCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -1782,7 +1697,7 @@ const DeleteArgs = struct {
 
 fn runDeleteCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -2009,7 +1924,7 @@ const AddArgs = struct {
 
 fn runAddCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -2465,7 +2380,7 @@ const AttachArgs = struct {
 
 fn runAttachCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -2664,7 +2579,7 @@ const DetachArgs = struct {
 
 fn runDetachCommand(
     allocator: std.mem.Allocator,
-    arg_it: *std.process.ArgIterator,
+    arg_it: *SliceArgIterator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -2900,7 +2815,7 @@ fn printMainUsage(stdout: *std.Io.Writer, pdfium_version: ?u32) void {
     }
     stdout.writeAll(
         \\
-        \\Usage: pdfzig <command> [options]
+        \\Usage: pdfzig [global-options] <command> [options]
         \\
         \\Commands:
         \\  render              Render PDF pages to images
@@ -2914,12 +2829,12 @@ fn printMainUsage(stdout: *std.Io.Writer, pdfium_version: ?u32) void {
         \\  add                 Add new page to PDF
         \\  attach              Attach files to PDF
         \\  detach              Remove attachments from PDF
-        \\  link_pdfium         Link a specific PDFium library
         \\  download_pdfium     Download PDFium library
         \\
         \\Global Options:
-        \\  -h, --help      Show this help message
-        \\  -v, --version   Show version
+        \\  -link <path>           Load PDFium library from specified path
+        \\  -h, --help             Show this help message
+        \\  -v, --version          Show version
         \\
         \\Run 'pdfzig <command> --help' for command-specific help.
         \\

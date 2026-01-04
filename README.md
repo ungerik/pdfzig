@@ -249,15 +249,19 @@ pdfzig detach -g "*.xml" document.pdf
 pdfzig detach -o clean.pdf -g "*.tmp" document.pdf
 ```
 
-### Link PDFium Library
+### Use a Specific PDFium Library
+
+The `-link` global option loads PDFium from a specific path instead of the default location:
 
 ```bash
-# Link a specific PDFium library file
-pdfzig link_pdfium /path/to/libpdfium.dylib -v 7606
+# Use a specific PDFium library for a command
+pdfzig -link /path/to/libpdfium.dylib info document.pdf
 
-# Version is auto-detected from filename patterns like pdfium_v7606.dylib
-pdfzig link_pdfium /path/to/pdfium_v7606.dylib
+# Works with any command
+pdfzig -link /usr/local/lib/libpdfium.dylib render document.pdf
 ```
+
+The version number is automatically parsed from filenames matching the pattern `libpdfium_v{VERSION}.dylib` (or `.so`/`.dll` on other platforms).
 
 ### Password-Protected PDFs
 
