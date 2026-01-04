@@ -398,3 +398,68 @@ test "parseResolution invalid values" {
     try std.testing.expect(parseResolution("abcdpi") == null);
     try std.testing.expect(parseResolution("dpi") == null);
 }
+
+test "SliceArgIterator" {
+    const args = [_][]const u8{ "arg1", "arg2", "arg3" };
+    var it = SliceArgIterator.init(&args);
+
+    try std.testing.expectEqualStrings("arg1", it.next().?);
+    try std.testing.expectEqualStrings("arg2", it.next().?);
+    try std.testing.expectEqualStrings("arg3", it.next().?);
+    try std.testing.expect(it.next() == null);
+}
+
+test "SliceArgIterator skip" {
+    const args = [_][]const u8{ "arg1", "arg2", "arg3" };
+    var it = SliceArgIterator.init(&args);
+
+    try std.testing.expect(it.skip() == true);
+    try std.testing.expectEqualStrings("arg2", it.next().?);
+    try std.testing.expect(it.skip() == true);
+    try std.testing.expect(it.skip() == false);
+    try std.testing.expect(it.next() == null);
+}
+
+test "SliceArgIterator empty" {
+    const args = [_][]const u8{};
+    var it = SliceArgIterator.init(&args);
+
+    try std.testing.expect(it.next() == null);
+    try std.testing.expect(it.skip() == false);
+}
+
+test "PageSize.landscape" {
+    const portrait = PageSize{ .width = 100, .height = 200 };
+    const landscape = portrait.landscape();
+    try std.testing.expectApproxEqAbs(@as(f64, 200), landscape.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f64, 100), landscape.height, 0.01);
+}
+
+test "PageSize.StandardSize.getSize" {
+    // Test a few key sizes
+    const a4 = PageSize.StandardSize.a4.getSize();
+    try std.testing.expectApproxEqAbs(@as(f64, 595.28), a4.width, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f64, 841.89), a4.height, 0.5);
+
+    const letter = PageSize.StandardSize.letter.getSize();
+    try std.testing.expectApproxEqAbs(@as(f64, 612.0), letter.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 792.0), letter.height, 0.1);
+
+    // Ledger is landscape by default
+    const ledger = PageSize.StandardSize.ledger.getSize();
+    try std.testing.expectApproxEqAbs(@as(f64, 17 * 72), ledger.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 11 * 72), ledger.height, 0.1);
+}
+
+test "PageSize.StandardSize.fromString" {
+    try std.testing.expectEqual(PageSize.StandardSize.a4, PageSize.StandardSize.fromString("a4").?);
+    try std.testing.expectEqual(PageSize.StandardSize.a4, PageSize.StandardSize.fromString("A4").?);
+    try std.testing.expectEqual(PageSize.StandardSize.letter, PageSize.StandardSize.fromString("Letter").?);
+    try std.testing.expectEqual(PageSize.StandardSize.letter, PageSize.StandardSize.fromString("LETTER").?);
+    try std.testing.expect(PageSize.StandardSize.fromString("invalid") == null);
+    try std.testing.expect(PageSize.StandardSize.fromString("") == null);
+}
+
+test "BLANK_PAGE constant" {
+    try std.testing.expectEqualStrings(":blank", BLANK_PAGE);
+}

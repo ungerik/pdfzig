@@ -339,3 +339,38 @@ test "buildLibraryFilename" {
     // Should contain pdfium
     try std.testing.expect(std.mem.indexOf(u8, filename, "pdfium") != null);
 }
+
+test "extractVersionFromPath edge cases" {
+    // Various valid formats
+    try std.testing.expectEqual(@as(?u32, 1), extractVersionFromPath("pdfium_v1.dylib"));
+    try std.testing.expectEqual(@as(?u32, 99999), extractVersionFromPath("pdfium_v99999.so"));
+
+    // Invalid formats
+    try std.testing.expectEqual(@as(?u32, null), extractVersionFromPath("pdfium_v.dylib")); // No number
+    try std.testing.expectEqual(@as(?u32, null), extractVersionFromPath("pdfium_vabc.dylib")); // Letters
+    try std.testing.expectEqual(@as(?u32, null), extractVersionFromPath("libpdfium.so")); // No _v
+    try std.testing.expectEqual(@as(?u32, null), extractVersionFromPath("")); // Empty
+}
+
+test "LoadError enum" {
+    // Just ensure the error enum is properly defined
+    const err: LoadError = LoadError.LibraryNotFound;
+    try std.testing.expect(err == LoadError.LibraryNotFound);
+}
+
+test "FPDF error constants" {
+    try std.testing.expectEqual(@as(c_ulong, 0), FPDF_ERR_SUCCESS);
+    try std.testing.expectEqual(@as(c_ulong, 1), FPDF_ERR_UNKNOWN);
+    try std.testing.expectEqual(@as(c_ulong, 2), FPDF_ERR_FILE);
+    try std.testing.expectEqual(@as(c_ulong, 3), FPDF_ERR_FORMAT);
+    try std.testing.expectEqual(@as(c_ulong, 4), FPDF_ERR_PASSWORD);
+    try std.testing.expectEqual(@as(c_ulong, 5), FPDF_ERR_SECURITY);
+    try std.testing.expectEqual(@as(c_ulong, 6), FPDF_ERR_PAGE);
+}
+
+test "FPDF render flag constants" {
+    try std.testing.expectEqual(@as(c_int, 0x01), FPDF_ANNOT);
+    try std.testing.expectEqual(@as(c_int, 0x02), FPDF_LCD_TEXT);
+    try std.testing.expectEqual(@as(c_int, 0x08), FPDF_GRAYSCALE);
+    try std.testing.expectEqual(@as(c_int, 0x800), FPDF_PRINTING);
+}

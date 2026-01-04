@@ -435,6 +435,34 @@ zig build all -Ddownload-pdfium
 zig build -Dtarget=x86_64-linux-gnu -Ddownload-pdfium
 ```
 
+### TODO: Integration Tests
+
+The following commands need integration tests with reference PDF files:
+
+| Command              | Tests Needed                                                          |
+|----------------------|-----------------------------------------------------------------------|
+| `render`             | Render pages to PNG/JPEG, verify output dimensions and format         |
+| `extract_text`       | Extract text, verify content matches expected output                  |
+| `extract_images`     | Extract embedded images, verify count and format                      |
+| `visual_diff`        | Compare identical/different PDFs, verify diff detection               |
+| `rotate`             | Rotate pages, verify rotation persists after save                     |
+| `mirror`             | Mirror pages horizontally/vertically, verify transformation           |
+| `delete`             | Delete pages, verify page count and remaining content                 |
+| `add`                | Add blank/image/text pages, verify insertion                          |
+| `create`             | Create from multiple sources, verify page import and ordering         |
+| `attach`             | Add attachments, verify attachment count and content                  |
+| `detach`             | Remove attachments, verify removal                                    |
+| `pdfium.Document`    | Open/close, importPages, createNew, save operations                   |
+
+Reference PDF files needed:
+- Simple single-page PDF
+- Multi-page PDF (10+ pages)
+- PDF with embedded images
+- PDF with text content
+- PDF with attachments
+- Password-protected PDF
+- PDF with various page sizes
+
 ## License
 
 MIT License - see [LICENSE](LICENSE)

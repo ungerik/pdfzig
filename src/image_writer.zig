@@ -217,3 +217,49 @@ test "formatOutputPath" {
         try std.testing.expectEqualStrings("document_005.jpg", path);
     }
 }
+
+test "Format.fromString" {
+    try std.testing.expectEqual(Format.png, Format.fromString("png").?);
+    try std.testing.expectEqual(Format.jpeg, Format.fromString("jpeg").?);
+    try std.testing.expectEqual(Format.jpeg, Format.fromString("jpg").?);
+    try std.testing.expect(Format.fromString("gif") == null);
+    try std.testing.expect(Format.fromString("") == null);
+    try std.testing.expect(Format.fromString("PNG") == null); // case sensitive
+}
+
+test "Format.extension" {
+    try std.testing.expectEqualStrings("png", Format.png.extension());
+    try std.testing.expectEqualStrings("jpg", Format.jpeg.extension());
+}
+
+test "formatOutputPath with unknown variable" {
+    const allocator = std.testing.allocator;
+    const path = try formatOutputPath(allocator, "page_{unknown}.{ext}", 1, 10, "test", .png);
+    defer allocator.free(path);
+    try std.testing.expectEqualStrings("page_{unknown}.png", path);
+}
+
+test "formatOutputPath zero padding" {
+    const allocator = std.testing.allocator;
+
+    // Single digit total pages - no padding needed
+    {
+        const path = try formatOutputPath(allocator, "{num0}.png", 1, 9, "test", .png);
+        defer allocator.free(path);
+        try std.testing.expectEqualStrings("1.png", path);
+    }
+
+    // Two digit total pages
+    {
+        const path = try formatOutputPath(allocator, "{num0}.png", 1, 99, "test", .png);
+        defer allocator.free(path);
+        try std.testing.expectEqualStrings("01.png", path);
+    }
+
+    // Three digit total pages
+    {
+        const path = try formatOutputPath(allocator, "{num0}.png", 1, 100, "test", .png);
+        defer allocator.free(path);
+        try std.testing.expectEqualStrings("001.png", path);
+    }
+}

@@ -217,3 +217,60 @@ test "getBasename" {
     try std.testing.expectEqualStrings("file", getBasename("file.txt"));
     try std.testing.expectEqualStrings("noext", getBasename("noext"));
 }
+
+test "getBasename edge cases" {
+    try std.testing.expectEqualStrings("file", getBasename("file."));
+    try std.testing.expectEqualStrings("", getBasename(".hidden"));
+    try std.testing.expectEqualStrings("doc", getBasename("/doc.pdf"));
+    try std.testing.expectEqualStrings("doc", getBasename("C:\\path\\doc.pdf"));
+}
+
+test "PageRange.contains" {
+    const range = PageRange{ .start = 5, .end = 10 };
+    try std.testing.expect(!range.contains(4));
+    try std.testing.expect(range.contains(5));
+    try std.testing.expect(range.contains(7));
+    try std.testing.expect(range.contains(10));
+    try std.testing.expect(!range.contains(11));
+}
+
+test "PageRange single page" {
+    const range = PageRange{ .start = 3, .end = 3 };
+    try std.testing.expect(!range.contains(2));
+    try std.testing.expect(range.contains(3));
+    try std.testing.expect(!range.contains(4));
+}
+
+test "parsePageRanges edge cases" {
+    const allocator = std.testing.allocator;
+
+    // With spaces
+    {
+        const ranges = try parsePageRanges(allocator, " 1 - 5 , 8 ", 20);
+        defer allocator.free(ranges);
+        try std.testing.expectEqual(@as(usize, 2), ranges.len);
+    }
+
+    // Empty parts ignored
+    {
+        const ranges = try parsePageRanges(allocator, "1,,3", 20);
+        defer allocator.free(ranges);
+        try std.testing.expectEqual(@as(usize, 2), ranges.len);
+    }
+}
+
+test "parsePageRanges errors" {
+    const allocator = std.testing.allocator;
+
+    // Page 0 is invalid
+    try std.testing.expectError(RenderError.InvalidPageRange, parsePageRanges(allocator, "0", 20));
+
+    // Page exceeds max
+    try std.testing.expectError(RenderError.InvalidPageRange, parsePageRanges(allocator, "25", 20));
+
+    // Start > end
+    try std.testing.expectError(RenderError.InvalidPageRange, parsePageRanges(allocator, "10-5", 20));
+
+    // Invalid number
+    try std.testing.expectError(RenderError.InvalidPageRange, parsePageRanges(allocator, "abc", 20));
+}

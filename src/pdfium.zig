@@ -1101,3 +1101,72 @@ pub const Bitmap = struct {
         };
     }
 };
+
+// ============================================================================
+// Tests (functions that don't require PDFium library)
+// ============================================================================
+
+test "Page.Rotation.fromDegrees" {
+    try std.testing.expectEqual(Page.Rotation.none, Page.Rotation.fromDegrees(0).?);
+    try std.testing.expectEqual(Page.Rotation.cw90, Page.Rotation.fromDegrees(90).?);
+    try std.testing.expectEqual(Page.Rotation.cw180, Page.Rotation.fromDegrees(180).?);
+    try std.testing.expectEqual(Page.Rotation.cw270, Page.Rotation.fromDegrees(270).?);
+    try std.testing.expectEqual(Page.Rotation.none, Page.Rotation.fromDegrees(360).?);
+    try std.testing.expectEqual(Page.Rotation.cw90, Page.Rotation.fromDegrees(450).?);
+    try std.testing.expect(Page.Rotation.fromDegrees(45) == null);
+    try std.testing.expect(Page.Rotation.fromDegrees(15) == null);
+}
+
+test "Page.Rotation.toDegrees" {
+    try std.testing.expectEqual(@as(i32, 0), Page.Rotation.none.toDegrees());
+    try std.testing.expectEqual(@as(i32, 90), Page.Rotation.cw90.toDegrees());
+    try std.testing.expectEqual(@as(i32, 180), Page.Rotation.cw180.toDegrees());
+    try std.testing.expectEqual(@as(i32, 270), Page.Rotation.cw270.toDegrees());
+}
+
+test "Page.Rotation.add" {
+    try std.testing.expectEqual(Page.Rotation.cw90, Page.Rotation.none.add(.cw90));
+    try std.testing.expectEqual(Page.Rotation.cw180, Page.Rotation.cw90.add(.cw90));
+    try std.testing.expectEqual(Page.Rotation.cw270, Page.Rotation.cw180.add(.cw90));
+    try std.testing.expectEqual(Page.Rotation.none, Page.Rotation.cw270.add(.cw90));
+    try std.testing.expectEqual(Page.Rotation.none, Page.Rotation.cw180.add(.cw180));
+}
+
+test "RenderFlags.toInt" {
+    // Default flags (only annotations enabled)
+    const default_flags = RenderFlags{};
+    try std.testing.expectEqual(loader.FPDF_ANNOT, default_flags.toInt());
+
+    // No flags
+    const no_flags = RenderFlags{ .annotations = false };
+    try std.testing.expectEqual(@as(c_int, 0), no_flags.toInt());
+
+    // Multiple flags
+    const multi_flags = RenderFlags{
+        .annotations = true,
+        .lcd_text = true,
+        .grayscale = true,
+    };
+    const expected = loader.FPDF_ANNOT | loader.FPDF_LCD_TEXT | loader.FPDF_GRAYSCALE;
+    try std.testing.expectEqual(expected, multi_flags.toInt());
+
+    // Printing flag
+    const print_flags = RenderFlags{ .annotations = false, .printing = true };
+    try std.testing.expectEqual(loader.FPDF_PRINTING, print_flags.toInt());
+}
+
+test "BitmapFormat values" {
+    try std.testing.expectEqual(@as(c_int, 1), @intFromEnum(BitmapFormat.gray));
+    try std.testing.expectEqual(@as(c_int, 2), @intFromEnum(BitmapFormat.bgr));
+    try std.testing.expectEqual(@as(c_int, 3), @intFromEnum(BitmapFormat.bgrx));
+    try std.testing.expectEqual(@as(c_int, 4), @intFromEnum(BitmapFormat.bgra));
+}
+
+test "PageObjectType values" {
+    try std.testing.expectEqual(@as(c_int, 0), @intFromEnum(PageObjectType.unknown));
+    try std.testing.expectEqual(@as(c_int, 1), @intFromEnum(PageObjectType.text));
+    try std.testing.expectEqual(@as(c_int, 2), @intFromEnum(PageObjectType.path));
+    try std.testing.expectEqual(@as(c_int, 3), @intFromEnum(PageObjectType.image));
+    try std.testing.expectEqual(@as(c_int, 4), @intFromEnum(PageObjectType.shading));
+    try std.testing.expectEqual(@as(c_int, 5), @intFromEnum(PageObjectType.form));
+}

@@ -545,3 +545,73 @@ test "hashToHex produces correct output" {
     const result = hashToHex(input);
     try std.testing.expectEqualStrings(expected, &result);
 }
+
+test "getPdfiumAssetNameForTarget macOS" {
+    try std.testing.expectEqualStrings("pdfium-mac-arm64.tgz", getPdfiumAssetNameForTarget(.aarch64, .macos).?);
+    try std.testing.expectEqualStrings("pdfium-mac-x64.tgz", getPdfiumAssetNameForTarget(.x86_64, .macos).?);
+    try std.testing.expect(getPdfiumAssetNameForTarget(.arm, .macos) == null);
+}
+
+test "getPdfiumAssetNameForTarget Linux" {
+    try std.testing.expectEqualStrings("pdfium-linux-arm64.tgz", getPdfiumAssetNameForTarget(.aarch64, .linux).?);
+    try std.testing.expectEqualStrings("pdfium-linux-x64.tgz", getPdfiumAssetNameForTarget(.x86_64, .linux).?);
+    try std.testing.expectEqualStrings("pdfium-linux-arm.tgz", getPdfiumAssetNameForTarget(.arm, .linux).?);
+}
+
+test "getPdfiumAssetNameForTarget Windows" {
+    try std.testing.expectEqualStrings("pdfium-win-arm64.tgz", getPdfiumAssetNameForTarget(.aarch64, .windows).?);
+    try std.testing.expectEqualStrings("pdfium-win-x64.tgz", getPdfiumAssetNameForTarget(.x86_64, .windows).?);
+    try std.testing.expectEqualStrings("pdfium-win-x86.tgz", getPdfiumAssetNameForTarget(.x86, .windows).?);
+}
+
+test "getPdfiumAssetNameForTarget unsupported" {
+    try std.testing.expect(getPdfiumAssetNameForTarget(.x86_64, .freebsd) == null);
+    try std.testing.expect(getPdfiumAssetNameForTarget(.mips, .linux) == null);
+}
+
+test "getSourceLibNameForTarget" {
+    try std.testing.expectEqualStrings("libpdfium.dylib", getSourceLibNameForTarget(.macos));
+    try std.testing.expectEqualStrings("libpdfium.so", getSourceLibNameForTarget(.linux));
+    try std.testing.expectEqualStrings("pdfium.dll", getSourceLibNameForTarget(.windows));
+    try std.testing.expectEqualStrings("libpdfium.so", getSourceLibNameForTarget(.freebsd));
+}
+
+test "getLibraryExtensionForTarget" {
+    try std.testing.expectEqualStrings(".dylib", getLibraryExtensionForTarget(.macos));
+    try std.testing.expectEqualStrings(".so", getLibraryExtensionForTarget(.linux));
+    try std.testing.expectEqualStrings(".dll", getLibraryExtensionForTarget(.windows));
+    try std.testing.expectEqualStrings(".so", getLibraryExtensionForTarget(.freebsd));
+}
+
+test "buildLibraryFilenameForTarget" {
+    const allocator = std.testing.allocator;
+
+    {
+        const filename = try buildLibraryFilenameForTarget(allocator, 7606, .macos);
+        defer allocator.free(filename);
+        try std.testing.expectEqualStrings("pdfium_v7606.dylib", filename);
+    }
+
+    {
+        const filename = try buildLibraryFilenameForTarget(allocator, 7606, .linux);
+        defer allocator.free(filename);
+        try std.testing.expectEqualStrings("pdfium_v7606.so", filename);
+    }
+
+    {
+        const filename = try buildLibraryFilenameForTarget(allocator, 7606, .windows);
+        defer allocator.free(filename);
+        try std.testing.expectEqualStrings("pdfium_v7606.dll", filename);
+    }
+}
+
+test "calculateHash" {
+    // Test with empty input
+    const empty_hash = calculateHash("");
+    try std.testing.expect(empty_hash[0] != 0 or empty_hash[1] != 0); // Should produce a hash
+
+    // Test with known input (SHA256 of "hello")
+    const hello_hash = calculateHash("hello");
+    const hello_hex = hashToHex(hello_hash);
+    try std.testing.expectEqualStrings("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", &hello_hex);
+}
