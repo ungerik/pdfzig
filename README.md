@@ -376,7 +376,7 @@ Commands supporting `-p`: `render`, `extract_text`, `extract_images`, `rotate`, 
 zig build
 
 # Run tests
-zig build test
+zig build test --summary all
 
 # Run directly
 zig build run -- info document.pdf
