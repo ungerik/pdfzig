@@ -183,12 +183,28 @@ pdfzig visual_diff -r 300 doc1.pdf doc2.pdf
 # Generate diff images showing differences
 pdfzig visual_diff -o ./diffs doc1.pdf doc2.pdf
 
+# Use RGB mode for per-channel color diffs
+pdfzig visual_diff -o ./diffs --colors rgb doc1.pdf doc2.pdf
+
+# Use gray mode (average diff) instead of contrast mode
+pdfzig visual_diff -o ./diffs --colors gray doc1.pdf doc2.pdf
+
+# Invert colors (white = identical, black = max difference)
+pdfzig visual_diff -o ./diffs --invert doc1.pdf doc2.pdf
+
 # Compare encrypted PDFs
 pdfzig visual_diff -P secret1 -P secret2 enc1.pdf enc2.pdf
 ```
 
-When `-o` is specified, grayscale diff images are created where each pixel's
-brightness represents the average RGB difference (black = identical, white = maximum difference).
+When `-o` is specified, diff images are created showing pixel differences.
+Output files are named `diff_page1.png`, `diff_page2.png`, etc.
+
+Color modes (`--colors`):
+- **contrast** (default): Grayscale where values are scaled so the maximum difference appears as white
+- **gray**: Grayscale where each pixel's brightness is the average RGB difference
+- **rgb**: Per-channel RGB differences shown as color values
+
+Use `--invert` to flip colors so identical pixels are white and differences are black.
 
 ### Display PDF Information
 

@@ -63,7 +63,9 @@ pub fn writeBitmap(
 
             // Write buffer for encoding
             var write_buffer: [4096]u8 = undefined;
-            image.writeToFilePath(std.heap.page_allocator, output_path, &write_buffer, .{ .png = .{} }) catch return WriteError.WriteError;
+            image.writeToFilePath(std.heap.page_allocator, output_path, &write_buffer, .{
+                .png = .{ .filter_choice = .heuristic },
+            }) catch return WriteError.WriteError;
         },
         .jpeg => {
             // Convert BGRA to RGB for JPEG (no alpha channel support)

@@ -34,6 +34,8 @@ Run the built executable directly:
 ./zig-out/bin/pdfzig extract_images document.pdf ./output
 ./zig-out/bin/pdfzig extract_attachments document.pdf
 ./zig-out/bin/pdfzig visual_diff doc1.pdf doc2.pdf
+./zig-out/bin/pdfzig visual_diff -o ./diffs --colors rgb doc1.pdf doc2.pdf
+./zig-out/bin/pdfzig visual_diff -o ./diffs --invert doc1.pdf doc2.pdf
 ./zig-out/bin/pdfzig info document.pdf
 ./zig-out/bin/pdfzig rotate 90 document.pdf             # Rotate all pages 90° clockwise
 ./zig-out/bin/pdfzig rotate -p 1-3 180 document.pdf     # Rotate pages 1-3 by 180°
