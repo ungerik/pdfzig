@@ -15,6 +15,7 @@ pub const FPDF_BITMAP = ?*opaque {};
 pub const FPDF_TEXTPAGE = ?*opaque {};
 pub const FPDF_PAGEOBJECT = ?*opaque {};
 pub const FPDF_ATTACHMENT = ?*opaque {};
+pub const FPDF_FONT = ?*opaque {};
 
 // ============================================================================
 // C Type Aliases
@@ -23,6 +24,14 @@ pub const FPDF_ATTACHMENT = ?*opaque {};
 pub const FPDF_BOOL = c_int;
 pub const FPDF_DWORD = c_ulong;
 pub const FPDF_STRING = [*c]const u8;
+pub const FPDF_BYTESTRING = [*c]const u8;
+pub const FPDF_WIDESTRING = [*c]const u16;
+
+/// File write callback structure for saving PDFs
+pub const FPDF_FILEWRITE = extern struct {
+    version: c_int = 1,
+    WriteBlock: *const fn (pThis: *FPDF_FILEWRITE, pData: ?*const anyopaque, size: c_ulong) callconv(.c) c_int,
+};
 
 // ============================================================================
 // Error Constants
@@ -124,6 +133,38 @@ pub const PdfiumLib = struct {
     FPDFDoc_GetAttachment: *const fn (document: FPDF_DOCUMENT, index: c_int) callconv(.c) FPDF_ATTACHMENT,
     FPDFAttachment_GetName: *const fn (attachment: FPDF_ATTACHMENT, buffer: ?*anyopaque, buflen: c_ulong) callconv(.c) c_ulong,
     FPDFAttachment_GetFile: *const fn (attachment: FPDF_ATTACHMENT, buffer: ?*anyopaque, buflen: c_ulong, out_buflen: *c_ulong) callconv(.c) FPDF_BOOL,
+    FPDFDoc_AddAttachment: *const fn (document: FPDF_DOCUMENT, name: FPDF_WIDESTRING) callconv(.c) FPDF_ATTACHMENT,
+    FPDFAttachment_SetFile: *const fn (attachment: FPDF_ATTACHMENT, document: FPDF_DOCUMENT, contents: ?*const anyopaque, len: c_ulong) callconv(.c) FPDF_BOOL,
+    FPDFDoc_DeleteAttachment: *const fn (document: FPDF_DOCUMENT, index: c_int) callconv(.c) FPDF_BOOL,
+
+    // Page rotation functions
+    FPDFPage_GetRotation: *const fn (page: FPDF_PAGE) callconv(.c) c_int,
+    FPDFPage_SetRotation: *const fn (page: FPDF_PAGE, rotate: c_int) callconv(.c) void,
+    FPDFPage_GenerateContent: *const fn (page: FPDF_PAGE) callconv(.c) FPDF_BOOL,
+
+    // Page deletion function
+    FPDFPage_Delete: *const fn (document: FPDF_DOCUMENT, page_index: c_int) callconv(.c) void,
+
+    // Document save functions
+    FPDF_SaveAsCopy: *const fn (document: FPDF_DOCUMENT, pFileWrite: *FPDF_FILEWRITE, flags: FPDF_DWORD) callconv(.c) FPDF_BOOL,
+    FPDF_SaveWithVersion: *const fn (document: FPDF_DOCUMENT, pFileWrite: *FPDF_FILEWRITE, flags: FPDF_DWORD, fileVersion: c_int) callconv(.c) FPDF_BOOL,
+
+    // Page creation and editing functions
+    FPDFPage_New: *const fn (document: FPDF_DOCUMENT, page_index: c_int, width: f64, height: f64) callconv(.c) FPDF_PAGE,
+    FPDFPage_InsertObject: *const fn (page: FPDF_PAGE, page_object: FPDF_PAGEOBJECT) callconv(.c) void,
+
+    // Image object functions
+    FPDFPageObj_NewImageObj: *const fn (document: FPDF_DOCUMENT) callconv(.c) FPDF_PAGEOBJECT,
+    FPDFImageObj_SetBitmap: *const fn (pages: ?*FPDF_PAGE, count: c_int, image_object: FPDF_PAGEOBJECT, bitmap: FPDF_BITMAP) callconv(.c) FPDF_BOOL,
+    FPDFImageObj_SetMatrix: *const fn (image_object: FPDF_PAGEOBJECT, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) callconv(.c) FPDF_BOOL,
+
+    // Text object functions
+    FPDFPageObj_NewTextObj: *const fn (document: FPDF_DOCUMENT, font: FPDF_BYTESTRING, font_size: f32) callconv(.c) FPDF_PAGEOBJECT,
+    FPDFText_SetText: *const fn (text_object: FPDF_PAGEOBJECT, text: FPDF_WIDESTRING) callconv(.c) FPDF_BOOL,
+    FPDFPageObj_Transform: *const fn (page_object: FPDF_PAGEOBJECT, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) callconv(.c) void,
+
+    // Bitmap creation (for image insertion)
+    FPDFBitmap_Create: *const fn (width: c_int, height: c_int, alpha: c_int) callconv(.c) FPDF_BITMAP,
 
     /// Load PDFium library from a specific path
     pub fn load(path: []const u8) LoadError!PdfiumLib {
@@ -181,7 +222,7 @@ pub fn getLibraryPrefix() []const u8 {
 
 /// Extract version number from a library path
 /// E.g., "pdfium_v7606.dylib" -> 7606, "libpdfium_v7606.so" -> 7606
-fn extractVersionFromPath(path: []const u8) ?u32 {
+pub fn extractVersionFromPath(path: []const u8) ?u32 {
     const basename = std.fs.path.basename(path);
 
     // Find "_v" in the basename

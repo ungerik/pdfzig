@@ -345,6 +345,158 @@ pub const Document = struct {
             .count = self.getAttachmentCount(),
         };
     }
+
+    /// Add an attachment to the document
+    /// The name should be the filename (will be converted to UTF-16LE)
+    pub fn addAttachment(self: Document, allocator: std.mem.Allocator, name: []const u8, content: []const u8) Error!void {
+        const l = lib orelse return Error.LibraryNotLoaded;
+
+        // Convert name to UTF-16LE with null terminator
+        var name_utf16 = std.array_list.Managed(u16).init(allocator);
+        defer name_utf16.deinit();
+
+        for (name) |byte| {
+            name_utf16.append(@as(u16, byte)) catch return Error.Unknown;
+        }
+        name_utf16.append(0) catch return Error.Unknown; // Null terminator
+
+        // Add the attachment
+        const attachment = l.FPDFDoc_AddAttachment(self.handle, name_utf16.items.ptr);
+        if (attachment == null) {
+            return Error.Unknown;
+        }
+
+        // Set the file content
+        if (l.FPDFAttachment_SetFile(attachment, self.handle, content.ptr, @intCast(content.len)) == 0) {
+            return Error.Unknown;
+        }
+    }
+
+    /// Delete an attachment by index (0-indexed)
+    pub fn deleteAttachment(self: Document, index: u32) Error!void {
+        const l = lib orelse return Error.LibraryNotLoaded;
+        const count = self.getAttachmentCount();
+        if (index >= count) {
+            return Error.Unknown;
+        }
+        if (l.FPDFDoc_DeleteAttachment(self.handle, @intCast(index)) == 0) {
+            return Error.Unknown;
+        }
+    }
+
+    /// Delete a page from the document (0-indexed)
+    pub fn deletePage(self: Document, page_index: u32) Error!void {
+        const l = lib orelse return Error.LibraryNotLoaded;
+        const page_count = self.getPageCount();
+        if (page_index >= page_count) {
+            return Error.PageNotFound;
+        }
+        l.FPDFPage_Delete(self.handle, @intCast(page_index));
+    }
+
+    /// Create a new page at the specified index
+    /// Returns a Page handle that must be closed when done
+    pub fn createPage(self: Document, page_index: u32, width: f64, height: f64) Error!Page {
+        const l = lib orelse return Error.LibraryNotLoaded;
+        const handle = l.FPDFPage_New(self.handle, @intCast(page_index), width, height);
+        if (handle == null) {
+            return Error.Unknown;
+        }
+        return .{ .handle = handle };
+    }
+
+    /// Create an image object for this document
+    pub fn createImageObject(self: Document) Error!PageObject {
+        const l = lib orelse return Error.LibraryNotLoaded;
+        const handle = l.FPDFPageObj_NewImageObj(self.handle);
+        if (handle == null) {
+            return Error.Unknown;
+        }
+        return .{ .handle = handle };
+    }
+
+    /// Create a text object for this document using a standard font
+    /// Standard fonts: Courier, Courier-Bold, Courier-BoldOblique, Courier-Oblique,
+    /// Helvetica, Helvetica-Bold, Helvetica-BoldOblique, Helvetica-Oblique,
+    /// Times-Roman, Times-Bold, Times-BoldItalic, Times-Italic, Symbol, ZapfDingbats
+    pub fn createTextObject(self: Document, font_name: []const u8, font_size: f32) Error!PageObject {
+        const l = lib orelse return Error.LibraryNotLoaded;
+        const handle = l.FPDFPageObj_NewTextObj(self.handle, font_name.ptr, font_size);
+        if (handle == null) {
+            return Error.Unknown;
+        }
+        return .{ .handle = handle };
+    }
+
+    /// Save the document to a file
+    pub fn save(self: Document, path: []const u8) Error!void {
+        const l = lib orelse return Error.LibraryNotLoaded;
+
+        // Open file for writing
+        const file = std.fs.cwd().createFile(path, .{}) catch return Error.FileNotFound;
+        defer file.close();
+
+        // Create file write context with FPDF_FILEWRITE as first field
+        const FileWriteContext = struct {
+            fw: loader.FPDF_FILEWRITE,
+            file: std.fs.File,
+
+            fn writeBlock(pThis: *loader.FPDF_FILEWRITE, pData: ?*const anyopaque, size: c_ulong) callconv(.c) c_int {
+                const ctx: *@This() = @fieldParentPtr("fw", pThis);
+                const data: [*]const u8 = @ptrCast(pData orelse return 0);
+                ctx.file.writeAll(data[0..size]) catch return 0;
+                return 1; // Success
+            }
+        };
+
+        var ctx = FileWriteContext{
+            .fw = .{
+                .version = 1,
+                .WriteBlock = FileWriteContext.writeBlock,
+            },
+            .file = file,
+        };
+
+        if (l.FPDF_SaveAsCopy(self.handle, &ctx.fw, 0) == 0) {
+            return Error.Unknown;
+        }
+    }
+
+    /// Save the document to a file, preserving the original PDF version
+    pub fn saveWithVersion(self: Document, path: []const u8, version: ?u32) Error!void {
+        const l = lib orelse return Error.LibraryNotLoaded;
+
+        // Get current version if not specified
+        const file_version: c_int = if (version) |v| @intCast(v) else @intCast(self.getFileVersion() orelse 17);
+
+        // Open file for writing
+        const file = std.fs.cwd().createFile(path, .{}) catch return Error.FileNotFound;
+        defer file.close();
+
+        const FileWriteContext = struct {
+            fw: loader.FPDF_FILEWRITE,
+            file: std.fs.File,
+
+            fn writeBlock(pThis: *loader.FPDF_FILEWRITE, pData: ?*const anyopaque, size: c_ulong) callconv(.c) c_int {
+                const ctx: *@This() = @fieldParentPtr("fw", pThis);
+                const data: [*]const u8 = @ptrCast(pData orelse return 0);
+                ctx.file.writeAll(data[0..size]) catch return 0;
+                return 1;
+            }
+        };
+
+        var ctx = FileWriteContext{
+            .fw = .{
+                .version = 1,
+                .WriteBlock = FileWriteContext.writeBlock,
+            },
+            .file = file,
+        };
+
+        if (l.FPDF_SaveWithVersion(self.handle, &ctx.fw, 0, file_version) == 0) {
+            return Error.Unknown;
+        }
+    }
 };
 
 /// A PDF page handle
@@ -428,6 +580,76 @@ pub const Page = struct {
             .count = self.getObjectCount(),
         };
     }
+
+    /// Rotation values: 0=0°, 1=90°, 2=180°, 3=270° (clockwise)
+    pub const Rotation = enum(c_int) {
+        none = 0,
+        cw90 = 1,
+        cw180 = 2,
+        cw270 = 3,
+
+        /// Convert degrees to rotation enum
+        pub fn fromDegrees(degrees: i32) ?Rotation {
+            const normalized = @mod(degrees, 360);
+            return switch (normalized) {
+                0 => .none,
+                90, -270 => .cw90,
+                180, -180 => .cw180,
+                270, -90 => .cw270,
+                else => null,
+            };
+        }
+
+        /// Convert rotation to degrees
+        pub fn toDegrees(self: Rotation) i32 {
+            return switch (self) {
+                .none => 0,
+                .cw90 => 90,
+                .cw180 => 180,
+                .cw270 => 270,
+            };
+        }
+
+        /// Add rotation (clockwise)
+        pub fn add(self: Rotation, other: Rotation) Rotation {
+            const sum = @intFromEnum(self) + @intFromEnum(other);
+            return @enumFromInt(@mod(sum, 4));
+        }
+    };
+
+    /// Get current page rotation
+    pub fn getRotation(self: Page) Rotation {
+        const l = lib orelse return .none;
+        const rot = l.FPDFPage_GetRotation(self.handle);
+        return if (rot >= 0 and rot <= 3) @enumFromInt(rot) else .none;
+    }
+
+    /// Set page rotation (0=0°, 1=90°, 2=180°, 3=270° clockwise)
+    pub fn setRotation(self: Page, rotation: Rotation) void {
+        const l = lib orelse return;
+        l.FPDFPage_SetRotation(self.handle, @intFromEnum(rotation));
+    }
+
+    /// Rotate page by additional degrees (must be multiple of 90)
+    pub fn rotate(self: Page, degrees: i32) bool {
+        const delta = Rotation.fromDegrees(degrees) orelse return false;
+        const current = self.getRotation();
+        self.setRotation(current.add(delta));
+        return true;
+    }
+
+    /// Insert a page object into this page
+    /// Note: The page object will be owned by the page after insertion
+    pub fn insertObject(self: Page, obj: PageObject) void {
+        const l = lib orelse return;
+        l.FPDFPage_InsertObject(self.handle, obj.handle);
+    }
+
+    /// Generate content - must be called before saving after modifications
+    pub fn generateContent(self: Page) bool {
+        const l = lib orelse return false;
+        return l.FPDFPage_GenerateContent(self.handle) != 0;
+    }
 };
 
 /// Iterator for image objects on a page
@@ -459,6 +681,34 @@ pub const PageObject = struct {
         const l = lib orelse return .unknown;
         const obj_type = l.FPDFPageObj_GetType(self.handle);
         return @enumFromInt(obj_type);
+    }
+
+    /// Set the bitmap for an image object
+    pub fn setBitmap(self: PageObject, bitmap: Bitmap) bool {
+        const l = lib orelse return false;
+        return l.FPDFImageObj_SetBitmap(null, 0, self.handle, bitmap.handle) != 0;
+    }
+
+    /// Set the transformation matrix for an image object
+    /// Matrix: [a b 0; c d 0; e f 1] where (e, f) is translation
+    /// For scaling an image to (width, height) at position (x, y):
+    /// a=width, b=0, c=0, d=height, e=x, f=y
+    pub fn setImageMatrix(self: PageObject, width: f64, height: f64, x: f64, y: f64) bool {
+        const l = lib orelse return false;
+        return l.FPDFImageObj_SetMatrix(self.handle, width, 0, 0, height, x, y) != 0;
+    }
+
+    /// Transform the page object with a general matrix
+    /// Matrix: [a b 0; c d 0; e f 1]
+    pub fn transform(self: PageObject, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) void {
+        const l = lib orelse return;
+        l.FPDFPageObj_Transform(self.handle, a, b, c, d, e, f);
+    }
+
+    /// Set text content for a text object (UTF-16LE encoded)
+    pub fn setText(self: PageObject, text_utf16: []const u16) bool {
+        const l = lib orelse return false;
+        return l.FPDFText_SetText(self.handle, text_utf16.ptr) != 0;
     }
 };
 

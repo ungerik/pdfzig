@@ -24,17 +24,24 @@ Run the built executable directly:
 ./zig-out/bin/pdfzig extract_attachments document.pdf
 ./zig-out/bin/pdfzig visual_diff doc1.pdf doc2.pdf
 ./zig-out/bin/pdfzig info document.pdf
+./zig-out/bin/pdfzig rotate 90 document.pdf             # Rotate all pages 90° clockwise
+./zig-out/bin/pdfzig rotate -p 1-3 180 document.pdf     # Rotate pages 1-3 by 180°
+./zig-out/bin/pdfzig rotate -o rotated.pdf 270 doc.pdf  # Output to different file
+./zig-out/bin/pdfzig delete -p 1 document.pdf           # Delete first page
+./zig-out/bin/pdfzig delete -p 2-5 -o trimmed.pdf doc.pdf  # Delete pages 2-5, save to new file
+./zig-out/bin/pdfzig add document.pdf                   # Add empty page at end
+./zig-out/bin/pdfzig add document.pdf image.png         # Add page with image
 ```
 
 ## Architecture
 
 ### Core Modules
 
-- **src/main.zig** - CLI entry point with subcommand parsing (render, extract_text, extract_images, extract_attachments, visual_diff, info, download_pdfium). Each command has its own argument struct and run function.
+- **src/main.zig** - CLI entry point with subcommand parsing (render, extract_text, extract_images, extract_attachments, visual_diff, info, rotate, delete, add, download_pdfium). Each command has its own argument struct and run function.
 
 - **src/pdfium.zig** - Idiomatic Zig bindings for PDFium. Key types:
-  - `Document` - PDF document handle with metadata and attachment access
-  - `Page` - Page handle with rendering and object iteration
+  - `Document` - PDF document handle with metadata, attachment access, page deletion, and save functionality
+  - `Page` - Page handle with rendering, rotation, and object iteration
   - `TextPage` - Text extraction with UTF-16LE to UTF-8 conversion
   - `Bitmap` - BGRA bitmap for rendering
   - `ImageObject` / `ImageObjectIterator` - Embedded image extraction

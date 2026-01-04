@@ -15,6 +15,7 @@ const renderer = @import("renderer.zig");
 const image_writer = @import("image_writer.zig");
 const downloader = @import("downloader.zig");
 const loader = @import("pdfium_loader.zig");
+const zigimg = @import("zigimg");
 
 const version = "0.1.0";
 
@@ -25,6 +26,12 @@ const Command = enum {
     extract_attachments,
     visual_diff,
     info,
+    rotate,
+    delete,
+    add,
+    attach,
+    detach,
+    link_pdfium,
     download_pdfium,
     help,
     version_cmd,
@@ -47,14 +54,19 @@ pub fn main() !void {
     _ = arg_it.skip(); // Skip program name
 
     const command_str = arg_it.next() orelse {
-        printMainUsage(stdout);
+        // Try to load PDFium to show version in help
+        pdfium.init() catch {};
+        defer pdfium.deinit();
+        printMainUsage(stdout, pdfium.getVersion());
         try stdout.flush();
         return;
     };
 
     // Check for global flags first
     if (std.mem.eql(u8, command_str, "-h") or std.mem.eql(u8, command_str, "--help") or std.mem.eql(u8, command_str, "help")) {
-        printMainUsage(stdout);
+        pdfium.init() catch {};
+        defer pdfium.deinit();
+        printMainUsage(stdout, pdfium.getVersion());
         try stdout.flush();
         return;
     }
@@ -77,17 +89,36 @@ pub fn main() !void {
         .visual_diff
     else if (std.mem.eql(u8, command_str, "info"))
         .info
+    else if (std.mem.eql(u8, command_str, "rotate"))
+        .rotate
+    else if (std.mem.eql(u8, command_str, "delete"))
+        .delete
+    else if (std.mem.eql(u8, command_str, "add"))
+        .add
+    else if (std.mem.eql(u8, command_str, "attach"))
+        .attach
+    else if (std.mem.eql(u8, command_str, "detach"))
+        .detach
+    else if (std.mem.eql(u8, command_str, "link_pdfium"))
+        .link_pdfium
     else if (std.mem.eql(u8, command_str, "download_pdfium"))
         .download_pdfium
     else {
         try stderr.print("Unknown command: {s}\n\n", .{command_str});
         try stderr.flush();
-        printMainUsage(stdout);
+        pdfium.init() catch {};
+        defer pdfium.deinit();
+        printMainUsage(stdout, pdfium.getVersion());
         try stdout.flush();
         std.process.exit(1);
     };
 
-    // Handle download_pdfium command separately (doesn't need PDFium loaded)
+    // Handle link_pdfium and download_pdfium commands separately (manage PDFium library)
+    if (command == .link_pdfium) {
+        runLinkPdfiumCommand(allocator, &arg_it, stdout, stderr);
+        try stdout.flush();
+        return;
+    }
     if (command == .download_pdfium) {
         runDownloadPdfiumCommand(allocator, &arg_it, stdout, stderr);
         try stdout.flush();
@@ -110,8 +141,14 @@ pub fn main() !void {
         .extract_attachments => try runExtractAttachmentsCommand(allocator, &arg_it, stdout, stderr),
         .visual_diff => runVisualDiffCommand(allocator, &arg_it, stdout, stderr),
         .info => try runInfoCommand(allocator, &arg_it, stdout, stderr),
+        .rotate => try runRotateCommand(allocator, &arg_it, stdout, stderr),
+        .delete => try runDeleteCommand(allocator, &arg_it, stdout, stderr),
+        .add => try runAddCommand(allocator, &arg_it, stdout, stderr),
+        .attach => try runAttachCommand(allocator, &arg_it, stdout, stderr),
+        .detach => try runDetachCommand(allocator, &arg_it, stdout, stderr),
+        .link_pdfium => unreachable, // Handled above
         .download_pdfium => unreachable, // Handled above
-        .help => printMainUsage(stdout),
+        .help => printMainUsage(stdout, pdfium.getVersion()),
         .version_cmd => try stdout.print("pdfzig {s}\n", .{version}),
     }
 
@@ -1074,8 +1111,6 @@ fn runVisualDiffCommand(
 }
 
 fn writeGrayscalePng(data: []const u8, width: u32, height: u32, path: []const u8) !void {
-    const zigimg = @import("zigimg");
-
     // Create grayscale pixel data slice with correct type
     const pixel_data: []zigimg.color.Grayscale8 = @as(
         [*]zigimg.color.Grayscale8,
@@ -1164,6 +1199,168 @@ fn runDownloadPdfiumCommand(
         defer allocator.free(lib_info.path);
         stdout.print("Library installed at: {s}\n", .{lib_info.path}) catch {};
     }
+}
+
+// ============================================================================
+// Link PDFium Command
+// ============================================================================
+
+const LinkPdfiumArgs = struct {
+    library_path: ?[]const u8 = null,
+    version: ?u32 = null,
+    show_help: bool = false,
+};
+
+fn runLinkPdfiumCommand(
+    allocator: std.mem.Allocator,
+    arg_it: *std.process.ArgIterator,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) void {
+    var args = LinkPdfiumArgs{};
+
+    while (arg_it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                args.show_help = true;
+            } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
+                const ver_str = arg_it.next() orelse {
+                    stderr.writeAll("Error: -v/--version requires a version number\n") catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                };
+                args.version = std.fmt.parseInt(u32, ver_str, 10) catch {
+                    stderr.print("Error: Invalid version number '{s}'\n", .{ver_str}) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                };
+            } else {
+                stderr.print("Unknown option: {s}\n", .{arg}) catch {};
+                stderr.flush() catch {};
+                std.process.exit(1);
+            }
+        } else {
+            args.library_path = arg;
+        }
+    }
+
+    if (args.show_help) {
+        printLinkPdfiumUsage(stdout);
+        stdout.flush() catch {};
+        return;
+    }
+
+    const library_path = args.library_path orelse {
+        stderr.writeAll("Error: No library path specified\n\n") catch {};
+        stderr.flush() catch {};
+        printLinkPdfiumUsage(stderr);
+        stderr.flush() catch {};
+        std.process.exit(1);
+    };
+
+    // Get the executable directory
+    const exe_dir = loader.getExecutableDir(allocator) catch |err| {
+        stderr.print("Error: Could not determine executable directory: {}\n", .{err}) catch {};
+        stderr.flush() catch {};
+        std.process.exit(1);
+    };
+    defer allocator.free(exe_dir);
+
+    // Show currently linked version
+    if (loader.findBestPdfiumLibrary(allocator, exe_dir) catch null) |lib_info| {
+        defer allocator.free(lib_info.path);
+        stdout.print("Currently linked: PDFium v{d}\n", .{lib_info.version}) catch {};
+        stdout.print("  Path: {s}\n", .{lib_info.path}) catch {};
+    } else {
+        stdout.writeAll("Currently linked: none\n") catch {};
+    }
+    stdout.flush() catch {};
+
+    // Determine version - use provided version, or try to extract from filename
+    const lib_version = args.version orelse blk: {
+        const basename = std.fs.path.basename(library_path);
+        // Try to extract version from pdfium_v{version} pattern
+        if (std.mem.indexOf(u8, basename, "pdfium_v")) |_| {
+            break :blk loader.extractVersionFromPath(library_path);
+        }
+        // Try to extract version from chromium/{version} in path
+        if (std.mem.indexOf(u8, library_path, "chromium/")) |pos| {
+            const after_chromium = library_path[pos + 9 ..];
+            var end: usize = 0;
+            while (end < after_chromium.len and std.ascii.isDigit(after_chromium[end])) {
+                end += 1;
+            }
+            if (end > 0) {
+                break :blk std.fmt.parseInt(u32, after_chromium[0..end], 10) catch null;
+            }
+        }
+        break :blk null;
+    };
+
+    if (lib_version == null) {
+        stderr.writeAll("Error: Could not determine PDFium version from path.\n") catch {};
+        stderr.writeAll("Use -v/--version to specify the version number.\n") catch {};
+        stderr.flush() catch {};
+        std.process.exit(1);
+    }
+
+    const ver = lib_version.?;
+
+    // Build the destination filename
+    const dest_filename = loader.buildLibraryFilename(allocator, ver) catch {
+        stderr.writeAll("Error: Could not build destination filename\n") catch {};
+        stderr.flush() catch {};
+        std.process.exit(1);
+    };
+    defer allocator.free(dest_filename);
+
+    const dest_path = std.fs.path.join(allocator, &.{ exe_dir, dest_filename }) catch {
+        stderr.writeAll("Error: Could not build destination path\n") catch {};
+        stderr.flush() catch {};
+        std.process.exit(1);
+    };
+    defer allocator.free(dest_path);
+
+    // Copy the library file
+    stdout.print("\nLinking PDFium v{d}...\n", .{ver}) catch {};
+    stdout.flush() catch {};
+
+    std.fs.copyFileAbsolute(library_path, dest_path, .{}) catch |err| {
+        stderr.print("Error: Could not copy library file: {}\n", .{err}) catch {};
+        stderr.flush() catch {};
+        std.process.exit(1);
+    };
+
+    stdout.print("Library copied to: {s}\n", .{dest_path}) catch {};
+
+    // Verify by loading the library
+    if (loader.findBestPdfiumLibrary(allocator, exe_dir) catch null) |lib_info| {
+        defer allocator.free(lib_info.path);
+        stdout.print("\nNow linked: PDFium v{d}\n", .{lib_info.version}) catch {};
+    }
+}
+
+fn printLinkPdfiumUsage(out: *std.Io.Writer) void {
+    out.writeAll(
+        \\Usage: pdfzig link_pdfium [options] <library_path>
+        \\
+        \\Copy a PDFium shared library to the pdfzig directory for use.
+        \\
+        \\Arguments:
+        \\  library_path         Path to the PDFium shared library file
+        \\
+        \\Options:
+        \\  -v, --version <NUM>  Specify the PDFium/Chrome version number
+        \\  -h, --help           Show this help message
+        \\
+        \\The library will be renamed to pdfium_v{version}.{ext} in the
+        \\executable directory. If no version is specified, it will be
+        \\extracted from the path (e.g., pdfium_v7606.dylib or chromium/7606/).
+        \\
+        \\Example:
+        \\  pdfzig link_pdfium /path/to/libpdfium.dylib -v 7606
+        \\
+    ) catch {};
 }
 
 // ============================================================================
@@ -1300,6 +1497,1367 @@ fn printDocInfo(
 }
 
 // ============================================================================
+// Rotate Command
+// ============================================================================
+
+const RotateArgs = struct {
+    input_path: ?[]const u8 = null,
+    output_path: ?[]const u8 = null,
+    page_range: ?[]const u8 = null,
+    rotation: ?i32 = null,
+    password: ?[]const u8 = null,
+    show_help: bool = false,
+};
+
+fn runRotateCommand(
+    allocator: std.mem.Allocator,
+    arg_it: *std.process.ArgIterator,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    var args = RotateArgs{};
+
+    while (arg_it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                args.show_help = true;
+            } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+                args.output_path = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--pages")) {
+                args.page_range = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
+                args.password = arg_it.next();
+            } else {
+                try stderr.print("Unknown option: {s}\n", .{arg});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else if (args.input_path == null) {
+            args.input_path = arg;
+        } else if (args.rotation == null) {
+            // Parse rotation angle
+            args.rotation = std.fmt.parseInt(i32, arg, 10) catch {
+                try stderr.print("Invalid rotation angle: {s}\n", .{arg});
+                try stderr.flush();
+                std.process.exit(1);
+            };
+        }
+    }
+
+    if (args.show_help) {
+        printRotateUsage(stdout);
+        return;
+    }
+
+    const input_path = args.input_path orelse {
+        try stderr.writeAll("Error: No input PDF file specified\n\n");
+        try stderr.flush();
+        printRotateUsage(stdout);
+        std.process.exit(1);
+    };
+
+    const rotation = args.rotation orelse {
+        try stderr.writeAll("Error: No rotation angle specified\n\n");
+        try stderr.flush();
+        printRotateUsage(stdout);
+        std.process.exit(1);
+    };
+
+    // Validate rotation angle
+    if (@mod(rotation, 90) != 0) {
+        try stderr.writeAll("Error: Rotation must be a multiple of 90 degrees\n");
+        try stderr.flush();
+        std.process.exit(1);
+    }
+
+    // Determine output path
+    const output_path = args.output_path orelse input_path;
+    const overwrite_original = args.output_path == null;
+
+    // If overwriting, we need to save to a temp file first
+    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const actual_output_path = if (overwrite_original) blk: {
+        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
+            try stderr.writeAll("Error: Path too long\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        break :blk temp_path;
+    } else output_path;
+
+    // Open the document
+    var doc = if (args.password) |pwd|
+        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
+            try stderr.print("Error opening PDF: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    else
+        pdfium.Document.open(input_path) catch |err| {
+            if (err == pdfium.Error.PasswordRequired) {
+                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
+            } else {
+                try stderr.print("Error opening PDF: {}\n", .{err});
+            }
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    defer doc.close();
+
+    const page_count = doc.getPageCount();
+
+    // Parse page range or use all pages
+    var pages_to_rotate = std.array_list.Managed(u32).init(allocator);
+    defer pages_to_rotate.deinit();
+
+    if (args.page_range) |range| {
+        // Parse page range (e.g., "1-5,8,10-12")
+        var range_it = std.mem.splitScalar(u8, range, ',');
+        while (range_it.next()) |part| {
+            const trimmed = std.mem.trim(u8, part, " ");
+            if (std.mem.indexOf(u8, trimmed, "-")) |dash_pos| {
+                const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
+                const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
+                const start = std.fmt.parseInt(u32, start_str, 10) catch {
+                    try stderr.print("Invalid page range: {s}\n", .{part});
+                    try stderr.flush();
+                    std.process.exit(1);
+                };
+                const end = std.fmt.parseInt(u32, end_str, 10) catch {
+                    try stderr.print("Invalid page range: {s}\n", .{part});
+                    try stderr.flush();
+                    std.process.exit(1);
+                };
+                if (start < 1 or end > page_count or start > end) {
+                    try stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ part, page_count });
+                    try stderr.flush();
+                    std.process.exit(1);
+                }
+                var p = start;
+                while (p <= end) : (p += 1) {
+                    try pages_to_rotate.append(p);
+                }
+            } else {
+                const page_num = std.fmt.parseInt(u32, trimmed, 10) catch {
+                    try stderr.print("Invalid page number: {s}\n", .{trimmed});
+                    try stderr.flush();
+                    std.process.exit(1);
+                };
+                if (page_num < 1 or page_num > page_count) {
+                    try stderr.print("Invalid page number: {d} (document has {d} pages)\n", .{ page_num, page_count });
+                    try stderr.flush();
+                    std.process.exit(1);
+                }
+                try pages_to_rotate.append(page_num);
+            }
+        }
+    } else {
+        // Rotate all pages
+        var p: u32 = 1;
+        while (p <= page_count) : (p += 1) {
+            try pages_to_rotate.append(p);
+        }
+    }
+
+    // Rotate each specified page
+    for (pages_to_rotate.items) |page_num| {
+        var page = doc.loadPage(page_num - 1) catch |err| {
+            try stderr.print("Error loading page {d}: {}\n", .{ page_num, err });
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        defer page.close();
+
+        if (!page.rotate(rotation)) {
+            try stderr.print("Error: Invalid rotation angle {d}\n", .{rotation});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+
+        if (!page.generateContent()) {
+            try stderr.print("Error generating content for page {d}\n", .{page_num});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Save the document
+    doc.saveWithVersion(actual_output_path, null) catch |err| {
+        try stderr.print("Error saving PDF: {}\n", .{err});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // If overwriting original, rename temp file to original
+    if (overwrite_original) {
+        std.fs.cwd().deleteFile(input_path) catch {};
+        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
+            try stderr.print("Error replacing original file: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    // Report success
+    if (pages_to_rotate.items.len == page_count) {
+        try stdout.print("Rotated all {d} pages by {d}°\n", .{ page_count, rotation });
+    } else {
+        try stdout.print("Rotated {d} page(s) by {d}°\n", .{ pages_to_rotate.items.len, rotation });
+    }
+
+    if (!std.mem.eql(u8, output_path, input_path)) {
+        try stdout.print("Saved to: {s}\n", .{output_path});
+    }
+}
+
+fn printRotateUsage(stdout: *std.Io.Writer) void {
+    stdout.writeAll(
+        \\Usage: pdfzig rotate [options] <input.pdf> <degrees>
+        \\
+        \\Rotate PDF pages by the specified angle.
+        \\
+        \\Arguments:
+        \\  input.pdf             Input PDF file
+        \\  degrees               Rotation angle: 90, 180, 270 (or -90, -180, -270)
+        \\
+        \\Options:
+        \\  -o, --output <file>   Output file (default: overwrite input)
+        \\  -p, --pages <range>   Pages to rotate (e.g., "1-5,8,10-12", default: all)
+        \\  -P, --password <pwd>  Password for encrypted PDFs
+        \\  -h, --help            Show this help message
+        \\
+        \\Examples:
+        \\  pdfzig rotate document.pdf 90              # Rotate all pages 90° clockwise
+        \\  pdfzig rotate document.pdf -90             # Rotate all pages 90° counter-clockwise
+        \\  pdfzig rotate -p 1,3 document.pdf 180      # Rotate pages 1 and 3 by 180°
+        \\  pdfzig rotate -o out.pdf document.pdf 270  # Rotate and save to new file
+        \\
+    ) catch {};
+}
+
+// ============================================================================
+// Delete Command
+// ============================================================================
+
+const DeleteArgs = struct {
+    input_path: ?[]const u8 = null,
+    output_path: ?[]const u8 = null,
+    page_range: ?[]const u8 = null,
+    password: ?[]const u8 = null,
+    show_help: bool = false,
+};
+
+fn runDeleteCommand(
+    allocator: std.mem.Allocator,
+    arg_it: *std.process.ArgIterator,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    var args = DeleteArgs{};
+
+    while (arg_it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                args.show_help = true;
+            } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+                args.output_path = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--pages")) {
+                args.page_range = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
+                args.password = arg_it.next();
+            } else {
+                try stderr.print("Unknown option: {s}\n", .{arg});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else if (args.input_path == null) {
+            args.input_path = arg;
+        }
+    }
+
+    if (args.show_help) {
+        printDeleteUsage(stdout);
+        return;
+    }
+
+    const input_path = args.input_path orelse {
+        try stderr.writeAll("Error: No input PDF file specified\n\n");
+        try stderr.flush();
+        printDeleteUsage(stdout);
+        std.process.exit(1);
+    };
+
+    const page_range = args.page_range orelse {
+        try stderr.writeAll("Error: No pages specified for deletion. Use -p to specify pages.\n\n");
+        try stderr.flush();
+        printDeleteUsage(stdout);
+        std.process.exit(1);
+    };
+
+    // Determine output path
+    const output_path = args.output_path orelse input_path;
+    const overwrite_original = args.output_path == null;
+
+    // If overwriting, we need to save to a temp file first
+    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const actual_output_path = if (overwrite_original) blk: {
+        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
+            try stderr.writeAll("Error: Path too long\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        break :blk temp_path;
+    } else output_path;
+
+    // Open the document
+    var doc = if (args.password) |pwd|
+        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
+            try stderr.print("Error opening PDF: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    else
+        pdfium.Document.open(input_path) catch |err| {
+            if (err == pdfium.Error.PasswordRequired) {
+                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
+            } else {
+                try stderr.print("Error opening PDF: {}\n", .{err});
+            }
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    defer doc.close();
+
+    const page_count = doc.getPageCount();
+
+    // Parse page range to get pages to delete
+    var pages_to_delete = std.array_list.Managed(u32).init(allocator);
+    defer pages_to_delete.deinit();
+
+    // Parse page range (e.g., "1-5,8,10-12")
+    var range_it = std.mem.splitScalar(u8, page_range, ',');
+    while (range_it.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " ");
+        if (std.mem.indexOf(u8, trimmed, "-")) |dash_pos| {
+            const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
+            const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
+            const start = std.fmt.parseInt(u32, start_str, 10) catch {
+                try stderr.print("Invalid page range: {s}\n", .{part});
+                try stderr.flush();
+                std.process.exit(1);
+            };
+            const end = std.fmt.parseInt(u32, end_str, 10) catch {
+                try stderr.print("Invalid page range: {s}\n", .{part});
+                try stderr.flush();
+                std.process.exit(1);
+            };
+            if (start < 1 or end > page_count or start > end) {
+                try stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ part, page_count });
+                try stderr.flush();
+                std.process.exit(1);
+            }
+            var p = start;
+            while (p <= end) : (p += 1) {
+                try pages_to_delete.append(p);
+            }
+        } else {
+            const page_num = std.fmt.parseInt(u32, trimmed, 10) catch {
+                try stderr.print("Invalid page number: {s}\n", .{trimmed});
+                try stderr.flush();
+                std.process.exit(1);
+            };
+            if (page_num < 1 or page_num > page_count) {
+                try stderr.print("Invalid page number: {d} (document has {d} pages)\n", .{ page_num, page_count });
+                try stderr.flush();
+                std.process.exit(1);
+            }
+            try pages_to_delete.append(page_num);
+        }
+    }
+
+    // Check we're not deleting all pages
+    if (pages_to_delete.items.len >= page_count) {
+        try stderr.writeAll("Error: Cannot delete all pages from a PDF\n");
+        try stderr.flush();
+        std.process.exit(1);
+    }
+
+    // Sort in descending order so we delete from the end first
+    // (to avoid index shifting issues)
+    std.mem.sort(u32, pages_to_delete.items, {}, std.sort.desc(u32));
+
+    // Remove duplicates (keeping sorted descending order)
+    var unique_count: usize = 0;
+    var last_value: ?u32 = null;
+    for (pages_to_delete.items) |val| {
+        if (last_value == null or val != last_value.?) {
+            pages_to_delete.items[unique_count] = val;
+            unique_count += 1;
+            last_value = val;
+        }
+    }
+    pages_to_delete.items.len = unique_count;
+
+    const deleted_count = pages_to_delete.items.len;
+
+    // Delete pages (from highest to lowest index to avoid shifting issues)
+    for (pages_to_delete.items) |page_num| {
+        doc.deletePage(page_num - 1) catch |err| {
+            try stderr.print("Error deleting page {d}: {}\n", .{ page_num, err });
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    // Save the document
+    doc.saveWithVersion(actual_output_path, null) catch |err| {
+        try stderr.print("Error saving PDF: {}\n", .{err});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // If overwriting original, rename temp file to original
+    if (overwrite_original) {
+        std.fs.cwd().deleteFile(input_path) catch {};
+        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
+            try stderr.print("Error replacing original file: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    // Report success
+    try stdout.print("Deleted {d} page(s), {d} page(s) remaining\n", .{ deleted_count, page_count - deleted_count });
+
+    if (!std.mem.eql(u8, output_path, input_path)) {
+        try stdout.print("Saved to: {s}\n", .{output_path});
+    }
+}
+
+fn printDeleteUsage(stdout: *std.Io.Writer) void {
+    stdout.writeAll(
+        \\Usage: pdfzig delete [options] -p <pages> <input.pdf>
+        \\
+        \\Delete pages from a PDF document.
+        \\
+        \\Arguments:
+        \\  input.pdf             Input PDF file
+        \\
+        \\Options:
+        \\  -p, --pages <range>   Pages to delete (required, e.g., "1-5,8,10-12")
+        \\  -o, --output <file>   Output file (default: overwrite input)
+        \\  -P, --password <pwd>  Password for encrypted PDFs
+        \\  -h, --help            Show this help message
+        \\
+        \\Examples:
+        \\  pdfzig delete -p 1 document.pdf              # Delete first page
+        \\  pdfzig delete -p 1-3 document.pdf            # Delete pages 1, 2, and 3
+        \\  pdfzig delete -p 2,5,8 document.pdf          # Delete specific pages
+        \\  pdfzig delete -p 1-3 -o out.pdf document.pdf # Delete and save to new file
+        \\
+    ) catch {};
+}
+
+// ============================================================================
+// Add Command
+// ============================================================================
+
+const PageSize = struct { width: f64, height: f64 };
+
+const AddArgs = struct {
+    input_path: ?[]const u8 = null,
+    content_file: ?[]const u8 = null,
+    output_path: ?[]const u8 = null,
+    page_number: ?u32 = null, // 1-based page number to insert at
+    page_size: ?PageSize = null,
+    password: ?[]const u8 = null,
+    show_help: bool = false,
+};
+
+fn runAddCommand(
+    allocator: std.mem.Allocator,
+    arg_it: *std.process.ArgIterator,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    var args = AddArgs{};
+
+    while (arg_it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                args.show_help = true;
+            } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+                args.output_path = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--page")) {
+                if (arg_it.next()) |page_str| {
+                    args.page_number = std.fmt.parseInt(u32, page_str, 10) catch {
+                        try stderr.print("Invalid page number: {s}\n", .{page_str});
+                        try stderr.flush();
+                        std.process.exit(1);
+                    };
+                }
+            } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--size")) {
+                if (arg_it.next()) |size_str| {
+                    // Parse "WIDTHxHEIGHT" format
+                    if (std.mem.indexOf(u8, size_str, "x")) |x_pos| {
+                        const width = std.fmt.parseFloat(f64, size_str[0..x_pos]) catch {
+                            try stderr.print("Invalid size format: {s}\n", .{size_str});
+                            try stderr.flush();
+                            std.process.exit(1);
+                        };
+                        const height = std.fmt.parseFloat(f64, size_str[x_pos + 1 ..]) catch {
+                            try stderr.print("Invalid size format: {s}\n", .{size_str});
+                            try stderr.flush();
+                            std.process.exit(1);
+                        };
+                        args.page_size = .{ .width = width, .height = height };
+                    } else {
+                        try stderr.print("Invalid size format: {s} (use WIDTHxHEIGHT, e.g., 612x792)\n", .{size_str});
+                        try stderr.flush();
+                        std.process.exit(1);
+                    }
+                }
+            } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
+                args.password = arg_it.next();
+            } else {
+                try stderr.print("Unknown option: {s}\n", .{arg});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else if (args.input_path == null) {
+            args.input_path = arg;
+        } else if (args.content_file == null) {
+            args.content_file = arg;
+        }
+    }
+
+    if (args.show_help) {
+        printAddUsage(stdout);
+        return;
+    }
+
+    const input_path = args.input_path orelse {
+        try stderr.writeAll("Error: No input PDF file specified\n\n");
+        try stderr.flush();
+        printAddUsage(stdout);
+        std.process.exit(1);
+    };
+
+    // Determine output path
+    const output_path = args.output_path orelse input_path;
+    const overwrite_original = args.output_path == null;
+
+    // If overwriting, we need to save to a temp file first
+    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const actual_output_path = if (overwrite_original) blk: {
+        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
+            try stderr.writeAll("Error: Path too long\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        break :blk temp_path;
+    } else output_path;
+
+    // Open the document
+    var doc = if (args.password) |pwd|
+        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
+            try stderr.print("Error opening PDF: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    else
+        pdfium.Document.open(input_path) catch |err| {
+            if (err == pdfium.Error.PasswordRequired) {
+                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
+            } else {
+                try stderr.print("Error opening PDF: {}\n", .{err});
+            }
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    defer doc.close();
+
+    const page_count = doc.getPageCount();
+
+    // Determine page size
+    const page_size: PageSize = if (args.page_size) |size|
+        size
+    else if (page_count > 0) blk: {
+        // Use size of last page
+        var last_page = doc.loadPage(page_count - 1) catch {
+            break :blk PageSize{ .width = 612, .height = 792 }; // US Letter
+        };
+        defer last_page.close();
+        break :blk PageSize{ .width = last_page.getWidth(), .height = last_page.getHeight() };
+    } else PageSize{ .width = 612, .height = 792 }; // US Letter default
+
+    // Determine insertion index (0-based)
+    const insert_index: u32 = if (args.page_number) |p|
+        if (p == 0) 0 else @min(p - 1, page_count)
+    else
+        page_count; // Insert at end
+
+    // Create the new page
+    var new_page = doc.createPage(insert_index, page_size.width, page_size.height) catch |err| {
+        try stderr.print("Error creating page: {}\n", .{err});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer new_page.close();
+
+    // If content file is specified, add it to the page
+    if (args.content_file) |content_path| {
+        const ext = std.fs.path.extension(content_path);
+        const is_text = std.mem.eql(u8, ext, ".txt") or std.mem.eql(u8, ext, ".text");
+
+        if (is_text) {
+            // Handle text file
+            try addTextToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
+        } else {
+            // Handle image file
+            try addImageToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
+        }
+    }
+
+    // Generate content for the new page
+    if (!new_page.generateContent()) {
+        try stderr.writeAll("Error generating page content\n");
+        try stderr.flush();
+        std.process.exit(1);
+    }
+
+    // Save the document
+    doc.saveWithVersion(actual_output_path, null) catch |err| {
+        try stderr.print("Error saving PDF: {}\n", .{err});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // If overwriting original, rename temp file to original
+    if (overwrite_original) {
+        std.fs.cwd().deleteFile(input_path) catch {};
+        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
+            try stderr.print("Error replacing original file: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    // Report success
+    if (args.content_file) |content_path| {
+        try stdout.print("Added page with content from: {s}\n", .{std.fs.path.basename(content_path)});
+    } else {
+        try stdout.writeAll("Added empty page\n");
+    }
+
+    if (!std.mem.eql(u8, output_path, input_path)) {
+        try stdout.print("Saved to: {s}\n", .{output_path});
+    }
+}
+
+fn addImageToPage(
+    allocator: std.mem.Allocator,
+    doc: *pdfium.Document,
+    page: *pdfium.Page,
+    image_path: []const u8,
+    page_width: f64,
+    page_height: f64,
+    stderr: *std.Io.Writer,
+) !void {
+    // Load image using zigimg
+    var read_buffer: [1024 * 1024]u8 = undefined;
+    var img = zigimg.Image.fromFilePath(allocator, image_path, &read_buffer) catch {
+        try stderr.print("Error loading image: {s}\n", .{image_path});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer img.deinit(allocator);
+
+    const img_width: f64 = @floatFromInt(img.width);
+    const img_height: f64 = @floatFromInt(img.height);
+
+    // Calculate scale to fit page while maintaining aspect ratio
+    const scale_x = page_width / img_width;
+    const scale_y = page_height / img_height;
+    const scale = @min(scale_x, scale_y);
+
+    const scaled_width = img_width * scale;
+    const scaled_height = img_height * scale;
+
+    // Center on page
+    const x_offset = (page_width - scaled_width) / 2;
+    const y_offset = (page_height - scaled_height) / 2;
+
+    // Create bitmap in BGRA format for PDFium
+    var bitmap = pdfium.Bitmap.create(@intFromFloat(img_width), @intFromFloat(img_height), .bgra) catch {
+        try stderr.writeAll("Error creating bitmap\n");
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer bitmap.destroy();
+
+    // Copy image data to bitmap (convert to BGRA)
+    const buffer = bitmap.getBuffer() orelse {
+        try stderr.writeAll("Error getting bitmap buffer\n");
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // Convert image pixels to BGRA
+    const width: usize = @intCast(img.width);
+    const height: usize = @intCast(img.height);
+    const stride: usize = @intCast(bitmap.stride);
+
+    // Handle different pixel formats using zigimg's PixelStorage union
+    switch (img.pixels) {
+        .rgba32 => |pixels| {
+            for (0..height) |y| {
+                for (0..width) |x| {
+                    const pix = pixels[y * width + x];
+                    const dst_idx = y * stride + x * 4;
+                    buffer[dst_idx + 0] = pix.b;
+                    buffer[dst_idx + 1] = pix.g;
+                    buffer[dst_idx + 2] = pix.r;
+                    buffer[dst_idx + 3] = pix.a;
+                }
+            }
+        },
+        .rgb24 => |pixels| {
+            for (0..height) |y| {
+                for (0..width) |x| {
+                    const pix = pixels[y * width + x];
+                    const dst_idx = y * stride + x * 4;
+                    buffer[dst_idx + 0] = pix.b;
+                    buffer[dst_idx + 1] = pix.g;
+                    buffer[dst_idx + 2] = pix.r;
+                    buffer[dst_idx + 3] = 255;
+                }
+            }
+        },
+        .bgra32 => |pixels| {
+            // Already BGRA, just copy
+            for (0..height) |y| {
+                for (0..width) |x| {
+                    const pix = pixels[y * width + x];
+                    const dst_idx = y * stride + x * 4;
+                    buffer[dst_idx + 0] = pix.b;
+                    buffer[dst_idx + 1] = pix.g;
+                    buffer[dst_idx + 2] = pix.r;
+                    buffer[dst_idx + 3] = pix.a;
+                }
+            }
+        },
+        .grayscale8 => |pixels| {
+            for (0..height) |y| {
+                for (0..width) |x| {
+                    const gray = pixels[y * width + x].value;
+                    const dst_idx = y * stride + x * 4;
+                    buffer[dst_idx + 0] = gray;
+                    buffer[dst_idx + 1] = gray;
+                    buffer[dst_idx + 2] = gray;
+                    buffer[dst_idx + 3] = 255;
+                }
+            }
+        },
+        else => {
+            try stderr.print("Unsupported image format: {s}\n", .{@tagName(img.pixels)});
+            try stderr.flush();
+            std.process.exit(1);
+        },
+    }
+
+    // Create image object
+    var img_obj = doc.createImageObject() catch {
+        try stderr.writeAll("Error creating image object\n");
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // Set the bitmap on the image object
+    if (!img_obj.setBitmap(bitmap)) {
+        try stderr.writeAll("Error setting bitmap on image object\n");
+        try stderr.flush();
+        std.process.exit(1);
+    }
+
+    // Position and scale the image
+    if (!img_obj.setImageMatrix(scaled_width, scaled_height, x_offset, y_offset)) {
+        try stderr.writeAll("Error positioning image\n");
+        try stderr.flush();
+        std.process.exit(1);
+    }
+
+    // Insert image into page
+    page.insertObject(img_obj);
+}
+
+fn addTextToPage(
+    allocator: std.mem.Allocator,
+    doc: *pdfium.Document,
+    page: *pdfium.Page,
+    text_path: []const u8,
+    page_width: f64,
+    page_height: f64,
+    stderr: *std.Io.Writer,
+) !void {
+    // Read text file
+    const file = std.fs.cwd().openFile(text_path, .{}) catch {
+        try stderr.print("Error opening text file: {s}\n", .{text_path});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer file.close();
+
+    const text = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch {
+        try stderr.writeAll("Error reading text file\n");
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer allocator.free(text);
+
+    const font_size: f32 = 12.0;
+    const line_height: f64 = font_size * 1.2;
+    const margin: f64 = 72.0; // 1 inch margin
+    const max_width = page_width - 2 * margin;
+
+    var y_pos = page_height - margin - font_size;
+
+    // Split into lines and render each
+    var line_it = std.mem.splitScalar(u8, text, '\n');
+    while (line_it.next()) |line| {
+        if (y_pos < margin) break; // Out of page space
+
+        if (line.len == 0) {
+            y_pos -= line_height;
+            continue;
+        }
+
+        // Create text object
+        var text_obj = doc.createTextObject("Courier", font_size) catch {
+            try stderr.writeAll("Error creating text object\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        // Convert UTF-8 to UTF-16LE for PDFium
+        var utf16_buf = std.array_list.Managed(u16).init(allocator);
+        defer utf16_buf.deinit();
+
+        var utf8_view = std.unicode.Utf8View.init(line) catch {
+            // If not valid UTF-8, try Latin-1
+            for (line) |byte| {
+                try utf16_buf.append(@as(u16, byte));
+            }
+            try utf16_buf.append(0); // Null terminator
+            if (!text_obj.setText(utf16_buf.items)) {
+                continue;
+            }
+            text_obj.transform(1, 0, 0, 1, margin, y_pos);
+            page.insertObject(text_obj);
+            y_pos -= line_height;
+            continue;
+        };
+
+        var it = utf8_view.iterator();
+        while (it.nextCodepoint()) |codepoint| {
+            if (codepoint <= 0xFFFF) {
+                try utf16_buf.append(@intCast(codepoint));
+            } else {
+                // Surrogate pair for codepoints > 0xFFFF
+                const cp = codepoint - 0x10000;
+                try utf16_buf.append(@intCast(0xD800 + (cp >> 10)));
+                try utf16_buf.append(@intCast(0xDC00 + (cp & 0x3FF)));
+            }
+        }
+        try utf16_buf.append(0); // Null terminator
+
+        if (!text_obj.setText(utf16_buf.items)) {
+            continue;
+        }
+
+        // Position the text
+        text_obj.transform(1, 0, 0, 1, margin, y_pos);
+
+        // Insert into page
+        page.insertObject(text_obj);
+
+        y_pos -= line_height;
+    }
+
+    _ = max_width; // Will be used for text wrapping in future
+}
+
+fn printAddUsage(stdout: *std.Io.Writer) void {
+    stdout.writeAll(
+        \\Usage: pdfzig add [options] <input.pdf> [content_file]
+        \\
+        \\Add a new page to a PDF document.
+        \\
+        \\Arguments:
+        \\  input.pdf             Input PDF file
+        \\  content_file          Optional file to show on the page (image or .txt)
+        \\
+        \\Options:
+        \\  -p, --page <num>      Page number to insert at (default: end)
+        \\  -s, --size <WxH>      Page size in points, e.g., "612x792" (default: previous page or US Letter)
+        \\  -o, --output <file>   Output file (default: overwrite input)
+        \\  -P, --password <pwd>  Password for encrypted PDFs
+        \\  -h, --help            Show this help message
+        \\
+        \\Supported image formats: PNG, JPEG, BMP, TGA, PBM, PGM, PPM
+        \\
+        \\Examples:
+        \\  pdfzig add document.pdf                        # Add empty page at end
+        \\  pdfzig add -p 1 document.pdf                   # Insert empty page at beginning
+        \\  pdfzig add document.pdf image.png              # Add page with image
+        \\  pdfzig add -s 595x842 document.pdf             # Add A4-sized page
+        \\  pdfzig add document.pdf notes.txt              # Add page with text content
+        \\  pdfzig add -o out.pdf document.pdf photo.jpg   # Add and save to new file
+        \\
+    ) catch {};
+}
+
+// ============================================================================
+// Attach Command
+// ============================================================================
+
+const AttachArgs = struct {
+    input_path: ?[]const u8 = null,
+    output_path: ?[]const u8 = null,
+    glob_pattern: ?[]const u8 = null,
+    files: std.array_list.Managed([]const u8) = undefined,
+    password: ?[]const u8 = null,
+    show_help: bool = false,
+};
+
+fn runAttachCommand(
+    allocator: std.mem.Allocator,
+    arg_it: *std.process.ArgIterator,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    var args = AttachArgs{};
+    args.files = std.array_list.Managed([]const u8).init(allocator);
+    defer args.files.deinit();
+
+    while (arg_it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                args.show_help = true;
+            } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+                args.output_path = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-g") or std.mem.eql(u8, arg, "--glob")) {
+                args.glob_pattern = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
+                args.password = arg_it.next();
+            } else {
+                try stderr.print("Unknown option: {s}\n", .{arg});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else if (args.input_path == null) {
+            args.input_path = arg;
+        } else {
+            try args.files.append(arg);
+        }
+    }
+
+    if (args.show_help) {
+        printAttachUsage(stdout);
+        return;
+    }
+
+    const input_path = args.input_path orelse {
+        try stderr.writeAll("Error: No input PDF file specified\n\n");
+        try stderr.flush();
+        printAttachUsage(stdout);
+        std.process.exit(1);
+    };
+
+    // Handle glob pattern
+    if (args.glob_pattern) |pattern| {
+        // Expand glob pattern
+        var glob_results = std.fs.cwd().openDir(".", .{ .iterate = true }) catch {
+            try stderr.writeAll("Error: Cannot open current directory\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        defer glob_results.close();
+
+        var it = glob_results.iterate();
+        while (it.next() catch null) |entry| {
+            if (entry.kind != .file) continue;
+            if (matchGlob(pattern, entry.name)) {
+                const path_copy = allocator.dupe(u8, entry.name) catch {
+                    try stderr.writeAll("Error: Out of memory\n");
+                    try stderr.flush();
+                    std.process.exit(1);
+                };
+                try args.files.append(path_copy);
+            }
+        }
+    }
+
+    if (args.files.items.len == 0) {
+        try stderr.writeAll("Error: No files to attach specified\n\n");
+        try stderr.flush();
+        printAttachUsage(stdout);
+        std.process.exit(1);
+    }
+
+    // Determine output path
+    const output_path = args.output_path orelse input_path;
+    const overwrite_original = args.output_path == null;
+
+    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const actual_output_path = if (overwrite_original) blk: {
+        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
+            try stderr.writeAll("Error: Path too long\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        break :blk temp_path;
+    } else output_path;
+
+    // Open the document
+    var doc = if (args.password) |pwd|
+        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
+            try stderr.print("Error opening PDF: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    else
+        pdfium.Document.open(input_path) catch |err| {
+            if (err == pdfium.Error.PasswordRequired) {
+                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
+            } else {
+                try stderr.print("Error opening PDF: {}\n", .{err});
+            }
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    defer doc.close();
+
+    // Attach each file
+    var attached_count: u32 = 0;
+    for (args.files.items) |file_path| {
+        // Read file content
+        const file = std.fs.cwd().openFile(file_path, .{}) catch {
+            try stderr.print("Error opening file: {s}\n", .{file_path});
+            try stderr.flush();
+            continue;
+        };
+        defer file.close();
+
+        const content = file.readToEndAlloc(allocator, 100 * 1024 * 1024) catch {
+            try stderr.print("Error reading file: {s}\n", .{file_path});
+            try stderr.flush();
+            continue;
+        };
+        defer allocator.free(content);
+
+        // Get just the filename for the attachment name
+        const name = std.fs.path.basename(file_path);
+
+        doc.addAttachment(allocator, name, content) catch {
+            try stderr.print("Error attaching file: {s}\n", .{file_path});
+            try stderr.flush();
+            continue;
+        };
+
+        attached_count += 1;
+    }
+
+    // Save the document
+    doc.saveWithVersion(actual_output_path, null) catch |err| {
+        try stderr.print("Error saving PDF: {}\n", .{err});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // If overwriting original, rename temp file
+    if (overwrite_original) {
+        std.fs.cwd().deleteFile(input_path) catch {};
+        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
+            try stderr.print("Error replacing original file: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    try stdout.print("Attached {d} file(s)\n", .{attached_count});
+    if (!std.mem.eql(u8, output_path, input_path)) {
+        try stdout.print("Saved to: {s}\n", .{output_path});
+    }
+}
+
+fn printAttachUsage(stdout: *std.Io.Writer) void {
+    stdout.writeAll(
+        \\Usage: pdfzig attach [options] <input.pdf> <file1> [file2] ...
+        \\
+        \\Add invisible file attachments to a PDF document.
+        \\
+        \\Arguments:
+        \\  input.pdf             Input PDF file
+        \\  file1, file2, ...     Files to attach
+        \\
+        \\Options:
+        \\  -g, --glob <pattern>  Glob pattern to match files (e.g., "*.xml")
+        \\  -o, --output <file>   Output file (default: overwrite input)
+        \\  -P, --password <pwd>  Password for encrypted PDFs
+        \\  -h, --help            Show this help message
+        \\
+        \\Examples:
+        \\  pdfzig attach document.pdf invoice.xml       # Attach single file
+        \\  pdfzig attach document.pdf a.txt b.txt       # Attach multiple files
+        \\  pdfzig attach -g "*.xml" document.pdf        # Attach all XML files
+        \\  pdfzig attach -o out.pdf doc.pdf data.json   # Save to new file
+        \\
+    ) catch {};
+}
+
+// ============================================================================
+// Detach Command
+// ============================================================================
+
+const DetachArgs = struct {
+    input_path: ?[]const u8 = null,
+    output_path: ?[]const u8 = null,
+    glob_pattern: ?[]const u8 = null,
+    indices: std.array_list.Managed(u32) = undefined,
+    password: ?[]const u8 = null,
+    show_help: bool = false,
+};
+
+fn runDetachCommand(
+    allocator: std.mem.Allocator,
+    arg_it: *std.process.ArgIterator,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    var args = DetachArgs{};
+    args.indices = std.array_list.Managed(u32).init(allocator);
+    defer args.indices.deinit();
+
+    while (arg_it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                args.show_help = true;
+            } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+                args.output_path = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-g") or std.mem.eql(u8, arg, "--glob")) {
+                args.glob_pattern = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--index")) {
+                if (arg_it.next()) |idx_str| {
+                    const idx = std.fmt.parseInt(u32, idx_str, 10) catch {
+                        try stderr.print("Invalid index: {s}\n", .{idx_str});
+                        try stderr.flush();
+                        std.process.exit(1);
+                    };
+                    try args.indices.append(idx);
+                }
+            } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
+                args.password = arg_it.next();
+            } else {
+                try stderr.print("Unknown option: {s}\n", .{arg});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else if (args.input_path == null) {
+            args.input_path = arg;
+        }
+    }
+
+    if (args.show_help) {
+        printDetachUsage(stdout);
+        return;
+    }
+
+    const input_path = args.input_path orelse {
+        try stderr.writeAll("Error: No input PDF file specified\n\n");
+        try stderr.flush();
+        printDetachUsage(stdout);
+        std.process.exit(1);
+    };
+
+    if (args.glob_pattern == null and args.indices.items.len == 0) {
+        try stderr.writeAll("Error: Specify attachments to remove with -g (glob) or -i (index)\n\n");
+        try stderr.flush();
+        printDetachUsage(stdout);
+        std.process.exit(1);
+    }
+
+    // Determine output path
+    const output_path = args.output_path orelse input_path;
+    const overwrite_original = args.output_path == null;
+
+    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const actual_output_path = if (overwrite_original) blk: {
+        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
+            try stderr.writeAll("Error: Path too long\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        break :blk temp_path;
+    } else output_path;
+
+    // Open the document
+    var doc = if (args.password) |pwd|
+        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
+            try stderr.print("Error opening PDF: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    else
+        pdfium.Document.open(input_path) catch |err| {
+            if (err == pdfium.Error.PasswordRequired) {
+                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
+            } else {
+                try stderr.print("Error opening PDF: {}\n", .{err});
+            }
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    defer doc.close();
+
+    const attachment_count = doc.getAttachmentCount();
+
+    // Build list of indices to delete
+    var indices_to_delete = std.array_list.Managed(u32).init(allocator);
+    defer indices_to_delete.deinit();
+
+    // Add explicitly specified indices
+    for (args.indices.items) |idx| {
+        if (idx < attachment_count) {
+            try indices_to_delete.append(idx);
+        } else {
+            try stderr.print("Warning: Attachment index {d} out of range (max {d})\n", .{ idx, attachment_count - 1 });
+            try stderr.flush();
+        }
+    }
+
+    // Match by glob pattern
+    if (args.glob_pattern) |pattern| {
+        var it = doc.attachments();
+        while (it.next()) |att| {
+            if (att.getName(allocator)) |name| {
+                defer allocator.free(name);
+                if (matchGlob(pattern, name)) {
+                    // Add if not already in list
+                    var found = false;
+                    for (indices_to_delete.items) |existing| {
+                        if (existing == it.index - 1) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        try indices_to_delete.append(it.index - 1);
+                    }
+                }
+            }
+        }
+    }
+
+    if (indices_to_delete.items.len == 0) {
+        try stderr.writeAll("No matching attachments found\n");
+        try stderr.flush();
+        return;
+    }
+
+    // Sort in descending order to delete from end first
+    std.mem.sort(u32, indices_to_delete.items, {}, std.sort.desc(u32));
+
+    const deleted_count = indices_to_delete.items.len;
+
+    // Delete attachments
+    for (indices_to_delete.items) |idx| {
+        doc.deleteAttachment(idx) catch |err| {
+            try stderr.print("Error deleting attachment {d}: {}\n", .{ idx, err });
+            try stderr.flush();
+        };
+    }
+
+    // Save the document
+    doc.saveWithVersion(actual_output_path, null) catch |err| {
+        try stderr.print("Error saving PDF: {}\n", .{err});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // If overwriting original, rename temp file
+    if (overwrite_original) {
+        std.fs.cwd().deleteFile(input_path) catch {};
+        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
+            try stderr.print("Error replacing original file: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    try stdout.print("Removed {d} attachment(s)\n", .{deleted_count});
+    if (!std.mem.eql(u8, output_path, input_path)) {
+        try stdout.print("Saved to: {s}\n", .{output_path});
+    }
+}
+
+fn matchGlob(pattern: []const u8, name: []const u8) bool {
+    var pi: usize = 0;
+    var ni: usize = 0;
+    var star_pi: ?usize = null;
+    var star_ni: usize = 0;
+
+    while (ni < name.len) {
+        if (pi < pattern.len and (pattern[pi] == '?' or pattern[pi] == name[ni])) {
+            pi += 1;
+            ni += 1;
+        } else if (pi < pattern.len and pattern[pi] == '*') {
+            star_pi = pi;
+            star_ni = ni;
+            pi += 1;
+        } else if (star_pi) |sp| {
+            pi = sp + 1;
+            star_ni += 1;
+            ni = star_ni;
+        } else {
+            return false;
+        }
+    }
+
+    while (pi < pattern.len and pattern[pi] == '*') {
+        pi += 1;
+    }
+
+    return pi == pattern.len;
+}
+
+fn printDetachUsage(stdout: *std.Io.Writer) void {
+    stdout.writeAll(
+        \\Usage: pdfzig detach [options] <input.pdf>
+        \\
+        \\Remove file attachments from a PDF document.
+        \\
+        \\Arguments:
+        \\  input.pdf             Input PDF file
+        \\
+        \\Options:
+        \\  -i, --index <num>     Attachment index to remove (0-based, can be repeated)
+        \\  -g, --glob <pattern>  Glob pattern to match attachment names (e.g., "*.xml")
+        \\  -o, --output <file>   Output file (default: overwrite input)
+        \\  -P, --password <pwd>  Password for encrypted PDFs
+        \\  -h, --help            Show this help message
+        \\
+        \\Examples:
+        \\  pdfzig detach -i 0 document.pdf              # Remove first attachment
+        \\  pdfzig detach -i 0 -i 2 document.pdf         # Remove attachments 0 and 2
+        \\  pdfzig detach -g "*.xml" document.pdf        # Remove all XML attachments
+        \\  pdfzig detach -g "*" document.pdf            # Remove all attachments
+        \\  pdfzig detach -o out.pdf -i 0 document.pdf   # Save to new file
+        \\
+    ) catch {};
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
@@ -1339,9 +2897,17 @@ fn getBasename(path: []const u8) []const u8 {
 // Usage Messages
 // ============================================================================
 
-fn printMainUsage(stdout: *std.Io.Writer) void {
+fn printMainUsage(stdout: *std.Io.Writer, pdfium_version: ?u32) void {
     stdout.writeAll(
         \\pdfzig - PDF utility tool using PDFium
+        \\
+    ) catch {};
+    if (pdfium_version) |v| {
+        stdout.print("PDFium version: {d}\n", .{v}) catch {};
+    } else {
+        stdout.writeAll("PDFium: not linked\n") catch {};
+    }
+    stdout.writeAll(
         \\
         \\Usage: pdfzig <command> [options]
         \\
@@ -1352,6 +2918,12 @@ fn printMainUsage(stdout: *std.Io.Writer) void {
         \\  extract_attachments Extract embedded attachments from PDF
         \\  visual_diff         Compare two PDFs visually
         \\  info                Display PDF metadata and information
+        \\  rotate              Rotate PDF pages
+        \\  delete              Delete PDF pages
+        \\  add                 Add new page to PDF
+        \\  attach              Attach files to PDF
+        \\  detach              Remove attachments from PDF
+        \\  link_pdfium         Link a specific PDFium library
         \\  download_pdfium     Download PDFium library
         \\
         \\Global Options:
