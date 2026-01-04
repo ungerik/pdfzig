@@ -97,25 +97,48 @@ fn ensureTestFiles(allocator: std.mem.Allocator) !void {
     }
 }
 
-/// Download a file from the sample-files repository
+/// Download a file from the sample-files repository using native Zig HTTP
 fn downloadFile(allocator: std.mem.Allocator, remote_path: []const u8, local_path: []const u8) !void {
     const url = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_download_url, remote_path });
     defer allocator.free(url);
 
-    // Use curl to download (simpler than implementing HTTP client)
-    var child = std.process.Child.init(&.{ "curl", "-sL", "-o", local_path, "--create-dirs", url }, allocator);
-    child.spawn() catch |err| {
-        std.debug.print("Failed to spawn curl: {}\n", .{err});
-        return err;
+    std.debug.print("Downloading: {s}\n", .{remote_path});
+
+    // Use native Zig HTTP client
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    var response_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer response_writer.deinit();
+
+    const result = client.fetch(.{
+        .location = .{ .url = url },
+        .response_writer = &response_writer.writer,
+    }) catch {
+        std.debug.print("HTTP request failed\n", .{});
+        return error.DownloadFailed;
     };
-    const result = child.wait() catch |err| {
-        std.debug.print("Failed to wait for curl: {}\n", .{err});
-        return err;
-    };
-    if (result.Exited != 0) {
-        std.debug.print("curl exited with code: {}\n", .{result.Exited});
+
+    if (result.status != .ok) {
+        std.debug.print("HTTP status: {}\n", .{result.status});
         return error.DownloadFailed;
     }
+
+    // Get the downloaded data and write to file
+    var list = response_writer.toArrayList();
+    const data = list.toOwnedSlice(allocator) catch return error.DownloadFailed;
+    defer allocator.free(data);
+
+    // Write to file
+    const file = std.fs.cwd().createFile(local_path, .{}) catch |err| {
+        std.debug.print("Failed to create file: {}\n", .{err});
+        return err;
+    };
+    defer file.close();
+    file.writeAll(data) catch |err| {
+        std.debug.print("Failed to write file: {}\n", .{err});
+        return err;
+    };
 }
 
 /// Get the local path for a test file
@@ -132,7 +155,7 @@ test "info: page count verification" {
 
     try ensureTestFiles(allocator);
 
-    pdfium.init();
+    try pdfium.init();
     defer pdfium.deinit();
 
     for (test_files) |tf| {
@@ -159,7 +182,7 @@ test "info: encrypted detection" {
 
     try ensureTestFiles(allocator);
 
-    pdfium.init();
+    try pdfium.init();
     defer pdfium.deinit();
 
     for (test_files) |tf| {
@@ -188,7 +211,7 @@ test "info: metadata retrieval" {
 
     try ensureTestFiles(allocator);
 
-    pdfium.init();
+    try pdfium.init();
     defer pdfium.deinit();
 
     // Test with minimal document
@@ -214,7 +237,7 @@ test "info: file version" {
 
     try ensureTestFiles(allocator);
 
-    pdfium.init();
+    try pdfium.init();
     defer pdfium.deinit();
 
     const local_path = try getTestFilePath(allocator, "001-trivial/minimal-document.pdf");
@@ -237,7 +260,7 @@ test "info: image objects detection" {
 
     try ensureTestFiles(allocator);
 
-    pdfium.init();
+    try pdfium.init();
     defer pdfium.deinit();
 
     // Test document with image
@@ -290,7 +313,7 @@ test "info: multi-page document" {
 
     try ensureTestFiles(allocator);
 
-    pdfium.init();
+    try pdfium.init();
     defer pdfium.deinit();
 
     const local_path = try getTestFilePath(allocator, "004-pdflatex-4-pages/pdflatex-4-pages.pdf");

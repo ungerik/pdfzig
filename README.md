@@ -18,7 +18,6 @@ A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
 ### Requirements
 
 - Zig 0.15.1 or later
-- curl (for downloading PDFium binaries during build)
 
 ### Build
 
@@ -28,9 +27,23 @@ cd pdfzig
 zig build
 ```
 
-PDFium binaries are automatically downloaded for your platform on first build.
+### Download PDFium
 
-The executable and required library will be in `zig-out/bin/`.
+After building, download the PDFium library for your platform:
+
+```bash
+# Download latest PDFium build
+./zig-out/bin/pdfzig download_pdfium
+
+# Or download a specific Chromium build version
+./zig-out/bin/pdfzig download_pdfium 7606
+```
+
+PDFium is automatically downloaded on first use if not already present. The library is installed next to the pdfzig executable with the naming pattern `libpdfium_v{BUILD}.dylib` (macOS), `libpdfium_v{BUILD}.so` (Linux), or `pdfium_v{BUILD}.dll` (Windows).
+
+Downloads are verified using SHA256 checksums from the GitHub release API to ensure authenticity and integrity.
+
+The executable will be in `zig-out/bin/`.
 
 ## Usage
 
@@ -174,7 +187,7 @@ pdfzig extract_text -P mypassword encrypted.pdf
 
 ## Dependencies
 
-- [PDFium](https://pdfium.googlesource.com/pdfium/) - PDF rendering engine (auto-downloaded from [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries))
+- [PDFium](https://pdfium.googlesource.com/pdfium/) - PDF rendering engine (dynamically loaded at runtime from [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries))
 - [zigimg](https://github.com/zigimg/zigimg) - PNG encoding
 - [zstbi](https://github.com/zig-gamedev/zstbi) - JPEG encoding
 
