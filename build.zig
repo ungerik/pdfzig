@@ -1,8 +1,27 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // Option to download PDFium libraries
+    const download_pdfium = b.option(bool, "download-pdfium", "Download PDFium library for target platform(s)") orelse false;
+
+    // Build the download helper if needed (for host platform)
+    var download_helper: ?*std.Build.Step.Compile = null;
+    if (download_pdfium) {
+        const helper_mod = b.createModule(.{
+            .root_source_file = b.path("src/build_download_helper.zig"),
+            .target = b.graph.host,
+        });
+        helper_mod.link_libc = true;
+
+        download_helper = b.addExecutable(.{
+            .name = "build_download_helper",
+            .root_module = helper_mod,
+        });
+    }
 
     // Get zigimg dependency
     const zigimg_dep = b.dependency("zigimg", .{
@@ -38,7 +57,19 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
-    b.installArtifact(exe);
+    const install_exe = b.addInstallArtifact(exe, .{});
+    b.getInstallStep().dependOn(&install_exe.step);
+
+    // Download PDFium for native target if enabled
+    if (download_helper) |helper| {
+        const resolved = target.result;
+        const download_run = b.addRunArtifact(helper);
+        download_run.addArg(@tagName(resolved.cpu.arch));
+        download_run.addArg(@tagName(resolved.os.tag));
+        download_run.addArg(b.fmt("{s}/bin", .{b.install_path}));
+        download_run.step.dependOn(&install_exe.step);
+        b.getInstallStep().dependOn(&download_run.step);
+    }
 
     // Install license files
     b.installFile("LICENSE", "LICENSE");
@@ -97,24 +128,6 @@ pub fn build(b: *std.Build) void {
 
     // Cross-compile for all supported platforms
     const all_step = b.step("all", "Build for all supported platforms");
-
-    // Option to download PDFium for each target platform
-    const download_pdfium = b.option(bool, "download-pdfium", "Download PDFium libraries for each target platform") orelse false;
-
-    // Build the download helper if needed
-    var download_helper: ?*std.Build.Step.Compile = null;
-    if (download_pdfium) {
-        const helper_mod = b.createModule(.{
-            .root_source_file = b.path("src/build_download_helper.zig"),
-            .target = b.graph.host,
-        });
-        helper_mod.link_libc = true;
-
-        download_helper = b.addExecutable(.{
-            .name = "build_download_helper",
-            .root_module = helper_mod,
-        });
-    }
 
     const targets: []const std.Target.Query = &.{
         .{ .cpu_arch = .x86_64, .os_tag = .macos },

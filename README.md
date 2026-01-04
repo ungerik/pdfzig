@@ -326,9 +326,9 @@ Commands supporting `-p`: `render`, `extract_text`, `extract_images`, `rotate`, 
 
 ## Supported Platforms
 
-| Platform | Architecture |
-|----------|--------------|
-| macOS    | arm64, x86_64 |
+| Platform | Architecture       |
+|----------|--------------------|
+| macOS    | arm64, x86_64      |
 | Linux    | x86_64, arm64, arm |
 | Windows  | x86_64, x86, arm64 |
 
@@ -367,24 +367,42 @@ zig build all
 
 The `zig build all` command builds for all supported platforms:
 
-| Platform | Architecture | Output Directory |
-|----------|--------------|------------------|
-| macOS    | x86_64       | `zig-out/x86_64-macos-none/` |
-| macOS    | arm64        | `zig-out/aarch64-macos-none/` |
-| Linux    | x86_64       | `zig-out/x86_64-linux-gnu/` |
-| Linux    | arm64        | `zig-out/aarch64-linux-gnu/` |
+| Platform | Architecture | Output Directory               |
+|----------|--------------|--------------------------------|
+| macOS    | x86_64       | `zig-out/x86_64-macos-none/`   |
+| macOS    | arm64        | `zig-out/aarch64-macos-none/`  |
+| Linux    | x86_64       | `zig-out/x86_64-linux-gnu/`    |
+| Linux    | arm64        | `zig-out/aarch64-linux-gnu/`   |
 | Linux    | arm          | `zig-out/arm-linux-gnueabihf/` |
-| Windows  | x86_64       | `zig-out/x86_64-windows-gnu/` |
-| Windows  | x86          | `zig-out/x86-windows-gnu/` |
+| Windows  | x86_64       | `zig-out/x86_64-windows-gnu/`  |
+| Windows  | x86          | `zig-out/x86-windows-gnu/`     |
 | Windows  | arm64        | `zig-out/aarch64-windows-gnu/` |
 
-To also download the PDFium library for each target platform during the build:
+### Build Options
+
+| Option                    | Description                                                    |
+|---------------------------|----------------------------------------------------------------|
+| `-Ddownload-pdfium`       | Download PDFium library for target platform(s)                 |
+| `-Doptimize=ReleaseFast`  | Build with optimizations for speed                             |
+| `-Doptimize=ReleaseSmall` | Build with optimizations for size                              |
+| `-Doptimize=ReleaseSafe`  | Build with optimizations and runtime safety checks             |
+| `-Dtarget=<triple>`       | Cross-compile for a specific target (e.g., `x86_64-linux-gnu`) |
+
+Examples:
 
 ```bash
-zig build all -Ddownload-pdfium=true
-```
+# Build with PDFium library included
+zig build -Ddownload-pdfium
 
-This places the appropriate PDFium library (`.dylib`, `.so`, or `.dll`) alongside each executable.
+# Build optimized release with PDFium
+zig build -Doptimize=ReleaseFast -Ddownload-pdfium
+
+# Build for all platforms with PDFium libraries included
+zig build all -Ddownload-pdfium
+
+# Cross-compile for Linux with PDFium
+zig build -Dtarget=x86_64-linux-gnu -Ddownload-pdfium
+```
 
 ## License
 

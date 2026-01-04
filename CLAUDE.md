@@ -110,3 +110,4 @@ Run the built executable directly:
 ## Change Rules
 
 - When a command is changed or added, update README.md and CLAUDE.md
+- Always pad markdown tables in README.md to align vertical lines
