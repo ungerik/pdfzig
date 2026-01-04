@@ -91,7 +91,49 @@ pdfzig extract_text -o output.txt document.pdf
 
 # Extract from specific pages
 pdfzig extract_text -p 1-10 document.pdf
+
+# Extract as JSON with formatting information
+pdfzig extract_text --format json document.pdf
+
+# Save JSON to file
+pdfzig extract_text -f json -o output.json document.pdf
 ```
+
+#### JSON Output Format
+
+When using `--format json`, the output contains structured text blocks with formatting information:
+
+```json
+{
+  "pages": [
+    {
+      "page": 1,
+      "width": 595.28,
+      "height": 841.89,
+      "blocks": [
+        {
+          "text": "Hello World",
+          "bbox": {"left": 72.0, "top": 750.0, "right": 150.0, "bottom": 738.0},
+          "font": "Helvetica",
+          "size": 12.0,
+          "weight": 400,
+          "italic": false,
+          "color": "#000000"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each text block contains:
+- **text**: The text content
+- **bbox**: Bounding box with `left`, `top`, `right`, `bottom` coordinates (in PDF points)
+- **font**: Font name (or `null` if unavailable)
+- **size**: Font size in points
+- **weight**: Font weight (400 = normal, 700 = bold, -1 = unavailable)
+- **italic**: Whether the text is italic
+- **color**: CSS-compatible hex color (`#rrggbb` or `#rrggbbaa` with alpha)
 
 ### Extract Embedded Images
 
@@ -453,6 +495,7 @@ The following commands need integration tests with reference PDF files:
 | `attach`             | Add attachments, verify attachment count and content                  |
 | `detach`             | Remove attachments, verify removal                                    |
 | `pdfium.Document`    | Open/close, importPages, createNew, save operations                   |
+| `extract_text --format json` | Verify JSON output structure, text blocks, formatting info     |
 
 Reference PDF files needed:
 - Simple single-page PDF
@@ -462,6 +505,7 @@ Reference PDF files needed:
 - PDF with attachments
 - Password-protected PDF
 - PDF with various page sizes
+- PDF with multiple fonts/styles (for extract_text JSON output testing)
 
 ## License
 

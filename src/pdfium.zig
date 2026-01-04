@@ -894,6 +894,128 @@ pub const TextPage = struct {
         const l = lib orelse return 0;
         return l.FPDFText_GetFontSize(self.handle, @intCast(index));
     }
+
+    /// Character bounding box in PDF coordinates
+    pub const CharBox = struct {
+        left: f64,
+        right: f64,
+        bottom: f64,
+        top: f64,
+    };
+
+    /// Get the bounding box of a character at index
+    pub fn getCharBox(self: TextPage, index: u32) ?CharBox {
+        const l = lib orelse return null;
+        var left: f64 = 0;
+        var right: f64 = 0;
+        var bottom: f64 = 0;
+        var top: f64 = 0;
+        if (l.FPDFText_GetCharBox(self.handle, @intCast(index), &left, &right, &bottom, &top) != 0) {
+            return .{ .left = left, .right = right, .bottom = bottom, .top = top };
+        }
+        return null;
+    }
+
+    /// Get the origin (x, y) of a character at index
+    pub fn getCharOrigin(self: TextPage, index: u32) ?struct { x: f64, y: f64 } {
+        const l = lib orelse return null;
+        var x: f64 = 0;
+        var y: f64 = 0;
+        if (l.FPDFText_GetCharOrigin(self.handle, @intCast(index), &x, &y) != 0) {
+            return .{ .x = x, .y = y };
+        }
+        return null;
+    }
+
+    /// Font descriptor flags (from PDF spec)
+    pub const FontFlags = struct {
+        raw: c_int,
+
+        pub fn isFixedPitch(self: FontFlags) bool {
+            return (self.raw & 0x1) != 0;
+        }
+        pub fn isSerif(self: FontFlags) bool {
+            return (self.raw & 0x2) != 0;
+        }
+        pub fn isSymbolic(self: FontFlags) bool {
+            return (self.raw & 0x4) != 0;
+        }
+        pub fn isScript(self: FontFlags) bool {
+            return (self.raw & 0x8) != 0;
+        }
+        pub fn isItalic(self: FontFlags) bool {
+            return (self.raw & 0x40) != 0;
+        }
+        pub fn isForceBold(self: FontFlags) bool {
+            return (self.raw & 0x40000) != 0;
+        }
+    };
+
+    /// Font information for a character
+    pub const FontInfo = struct {
+        name: []u8,
+        flags: FontFlags,
+    };
+
+    /// Get font information for a character at index
+    /// Caller owns the returned font name string
+    pub fn getCharFontInfo(self: TextPage, allocator: std.mem.Allocator, index: u32) ?FontInfo {
+        const l = lib orelse return null;
+
+        // First call to get required buffer size
+        var flags: c_int = 0;
+        const required_len = l.FPDFText_GetFontInfo(self.handle, @intCast(index), null, 0, &flags);
+        if (required_len == 0) return null;
+
+        // Allocate buffer and get font name
+        const buffer = allocator.alloc(u8, required_len) catch return null;
+        const actual_len = l.FPDFText_GetFontInfo(self.handle, @intCast(index), buffer.ptr, required_len, &flags);
+        if (actual_len == 0) {
+            allocator.free(buffer);
+            return null;
+        }
+
+        // Remove null terminator if present
+        const name_len = if (actual_len > 0 and buffer[actual_len - 1] == 0) actual_len - 1 else actual_len;
+
+        return .{
+            .name = buffer[0..name_len],
+            .flags = .{ .raw = flags },
+        };
+    }
+
+    /// Get font weight of a character (100-900, 400=normal, 700=bold)
+    /// Returns -1 on error
+    pub fn getCharFontWeight(self: TextPage, index: u32) i32 {
+        const l = lib orelse return -1;
+        return l.FPDFText_GetFontWeight(self.handle, @intCast(index));
+    }
+
+    /// RGBA color
+    pub const Color = struct {
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
+    };
+
+    /// Get fill color of a character at index
+    pub fn getCharFillColor(self: TextPage, index: u32) ?Color {
+        const l = lib orelse return null;
+        var r: c_uint = 0;
+        var g: c_uint = 0;
+        var b: c_uint = 0;
+        var a: c_uint = 0;
+        if (l.FPDFText_GetFillColor(self.handle, @intCast(index), &r, &g, &b, &a) != 0) {
+            return .{
+                .r = @intCast(r),
+                .g = @intCast(g),
+                .b = @intCast(b),
+                .a = @intCast(a),
+            };
+        }
+        return null;
+    }
 };
 
 /// An embedded file attachment in a PDF
@@ -1169,4 +1291,45 @@ test "PageObjectType values" {
     try std.testing.expectEqual(@as(c_int, 3), @intFromEnum(PageObjectType.image));
     try std.testing.expectEqual(@as(c_int, 4), @intFromEnum(PageObjectType.shading));
     try std.testing.expectEqual(@as(c_int, 5), @intFromEnum(PageObjectType.form));
+}
+
+test "TextPage.FontFlags methods" {
+    // Test individual flag bits
+    const fixed_pitch = TextPage.FontFlags{ .raw = 0x1 };
+    try std.testing.expect(fixed_pitch.isFixedPitch());
+    try std.testing.expect(!fixed_pitch.isSerif());
+
+    const serif = TextPage.FontFlags{ .raw = 0x2 };
+    try std.testing.expect(serif.isSerif());
+    try std.testing.expect(!serif.isFixedPitch());
+
+    const symbolic = TextPage.FontFlags{ .raw = 0x4 };
+    try std.testing.expect(symbolic.isSymbolic());
+
+    const script = TextPage.FontFlags{ .raw = 0x8 };
+    try std.testing.expect(script.isScript());
+
+    const italic = TextPage.FontFlags{ .raw = 0x40 };
+    try std.testing.expect(italic.isItalic());
+    try std.testing.expect(!italic.isForceBold());
+
+    const force_bold = TextPage.FontFlags{ .raw = 0x40000 };
+    try std.testing.expect(force_bold.isForceBold());
+    try std.testing.expect(!force_bold.isItalic());
+
+    // Test combined flags
+    const combined = TextPage.FontFlags{ .raw = 0x43 }; // fixed pitch + serif + italic
+    try std.testing.expect(combined.isFixedPitch());
+    try std.testing.expect(combined.isSerif());
+    try std.testing.expect(combined.isItalic());
+    try std.testing.expect(!combined.isSymbolic());
+
+    // Test zero flags
+    const none = TextPage.FontFlags{ .raw = 0 };
+    try std.testing.expect(!none.isFixedPitch());
+    try std.testing.expect(!none.isSerif());
+    try std.testing.expect(!none.isSymbolic());
+    try std.testing.expect(!none.isScript());
+    try std.testing.expect(!none.isItalic());
+    try std.testing.expect(!none.isForceBold());
 }

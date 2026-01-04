@@ -117,6 +117,11 @@ pub const PdfiumLib = struct {
     FPDFText_GetText: *const fn (text_page: FPDF_TEXTPAGE, start_index: c_int, count: c_int, result: ?*anyopaque) callconv(.c) c_int,
     FPDFText_GetUnicode: *const fn (text_page: FPDF_TEXTPAGE, index: c_int) callconv(.c) c_uint,
     FPDFText_GetFontSize: *const fn (text_page: FPDF_TEXTPAGE, index: c_int) callconv(.c) f64,
+    FPDFText_GetFontInfo: *const fn (text_page: FPDF_TEXTPAGE, index: c_int, buffer: ?[*]u8, buflen: c_ulong, flags: ?*c_int) callconv(.c) c_ulong,
+    FPDFText_GetFontWeight: *const fn (text_page: FPDF_TEXTPAGE, index: c_int) callconv(.c) c_int,
+    FPDFText_GetCharBox: *const fn (text_page: FPDF_TEXTPAGE, index: c_int, left: *f64, right: *f64, bottom: *f64, top: *f64) callconv(.c) FPDF_BOOL,
+    FPDFText_GetCharOrigin: *const fn (text_page: FPDF_TEXTPAGE, index: c_int, x: *f64, y: *f64) callconv(.c) FPDF_BOOL,
+    FPDFText_GetFillColor: *const fn (text_page: FPDF_TEXTPAGE, index: c_int, r: *c_uint, g: *c_uint, b: *c_uint, a: *c_uint) callconv(.c) FPDF_BOOL,
 
     // Page object functions
     FPDFPage_CountObjects: *const fn (page: FPDF_PAGE) callconv(.c) c_int,
