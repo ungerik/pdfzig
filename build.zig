@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
     var download_helper: ?*std.Build.Step.Compile = null;
     if (download_pdfium) {
         const helper_mod = b.createModule(.{
-            .root_source_file = b.path("src/build_download_helper.zig"),
+            .root_source_file = b.path("src/pdfium/build_download_helper.zig"),
             .target = b.graph.host,
         });
         helper_mod.link_libc = true;
@@ -35,6 +35,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Get glob dependency
+    const glob_dep = b.dependency("glob", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Create the main module
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -47,6 +53,9 @@ pub fn build(b: *std.Build) void {
 
     // Add zstbi import for JPEG encoding
     exe_mod.addImport("zstbi", zstbi_dep.module("root"));
+
+    // Add glob import
+    exe_mod.addImport("glob", glob_dep.module("glob"));
 
     // Link libc for dlopen on Unix
     exe_mod.link_libc = true;
@@ -95,6 +104,7 @@ pub fn build(b: *std.Build) void {
 
     test_mod.addImport("zigimg", zigimg_dep.module("zigimg"));
     test_mod.addImport("zstbi", zstbi_dep.module("root"));
+    test_mod.addImport("glob", glob_dep.module("glob"));
     test_mod.link_libc = true;
 
     const unit_tests = b.addTest(.{
@@ -153,6 +163,11 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
+        const cross_glob = b.dependency("glob", .{
+            .target = cross_target,
+            .optimize = optimize,
+        });
+
         const cross_mod = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = cross_target,
@@ -161,6 +176,7 @@ pub fn build(b: *std.Build) void {
 
         cross_mod.addImport("zigimg", cross_zigimg.module("zigimg"));
         cross_mod.addImport("zstbi", cross_zstbi.module("root"));
+        cross_mod.addImport("glob", cross_glob.module("glob"));
         cross_mod.link_libc = true;
 
         const cross_exe = b.addExecutable(.{

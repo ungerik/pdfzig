@@ -2,8 +2,8 @@
 //! Downloads test files from https://github.com/ZUGFeRD/corpus
 
 const std = @import("std");
-const pdfium = @import("pdfium.zig");
-const main = @import("main.zig");
+const pdfium = @import("../pdfium/pdfium.zig");
+const main = @import("../main.zig");
 
 const test_cache_dir = "test-cache/zugferd";
 const base_download_url = "https://raw.githubusercontent.com/ZUGFeRD/corpus/master/";

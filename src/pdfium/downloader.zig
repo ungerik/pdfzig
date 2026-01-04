@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const loader = @import("pdfium_loader.zig");
+const loader = @import("loader.zig");
 const Allocator = std.mem.Allocator;
 
 /// Progress callback function type

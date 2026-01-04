@@ -1,7 +1,7 @@
 //! Integration tests for the info subcommand using sample PDFs from py-pdf/sample-files
 
 const std = @import("std");
-const pdfium = @import("pdfium.zig");
+const pdfium = @import("../pdfium/pdfium.zig");
 
 const test_cache_dir = "test-cache";
 const files_json_url = "https://raw.githubusercontent.com/py-pdf/sample-files/refs/heads/main/files.json";

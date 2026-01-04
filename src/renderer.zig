@@ -1,7 +1,7 @@
 //! PDF renderer module - coordinates PDF rendering and image output
 
 const std = @import("std");
-const pdfium = @import("pdfium.zig");
+const pdfium = @import("pdfium/pdfium.zig");
 const image_writer = @import("image_writer.zig");
 
 pub const RenderOptions = struct {

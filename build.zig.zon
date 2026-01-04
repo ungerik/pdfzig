@@ -13,6 +13,10 @@
             .url = "git+https://github.com/zig-gamedev/zstbi#664305dd52640be15cbebd7cd73d1199679933e1",
             .hash = "zstbi-0.11.0-dev-L0Ea_2yVBwA4uh-tHfgdhZcQaWRoZVYlNGs4Dl_WTeuR",
         },
+        .glob = .{
+            .url = "https://github.com/xcaeser/glob.zig/archive/v0.1.0.tar.gz",
+            .hash = "glob-0.1.0-AymqdJQ4AABqoaLWCtZyfQh4_bEh7c8bhffcZNp7HWsL",
+        },
     },
 
     .paths = .{

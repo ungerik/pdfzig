@@ -5,7 +5,7 @@
 //! output of `extract_text --format json`.
 
 const std = @import("std");
-const pdfium = @import("pdfium.zig");
+const pdfium = @import("pdfium/pdfium.zig");
 const renderer = @import("renderer.zig");
 
 // ============================================================================
@@ -340,18 +340,11 @@ pub const StandardFont = enum {
 /// Case-insensitive substring search
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (needle.len > haystack.len) return false;
-
-    var i: usize = 0;
-    while (i + needle.len <= haystack.len) : (i += 1) {
-        var match = true;
-        for (needle, 0..) |nc, j| {
-            const hc = haystack[i + j];
-            if (std.ascii.toLower(hc) != std.ascii.toLower(nc)) {
-                match = false;
-                break;
-            }
+    const end = haystack.len - needle.len + 1;
+    for (0..end) |i| {
+        if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) {
+            return true;
         }
-        if (match) return true;
     }
     return false;
 }

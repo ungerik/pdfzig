@@ -3,7 +3,7 @@
 //! Uses runtime dynamic loading instead of build-time linking
 
 const std = @import("std");
-const loader = @import("pdfium_loader.zig");
+const loader = @import("loader.zig");
 const downloader = @import("downloader.zig");
 
 // Module-level library state

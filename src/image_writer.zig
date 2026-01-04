@@ -3,7 +3,7 @@
 const std = @import("std");
 const zigimg = @import("zigimg");
 const zstbi = @import("zstbi");
-const pdfium = @import("pdfium.zig");
+const pdfium = @import("pdfium/pdfium.zig");
 
 pub const Format = enum {
     png,
