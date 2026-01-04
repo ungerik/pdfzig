@@ -11,6 +11,7 @@ A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
 - **Visual diff** - compare two PDFs visually, pixel by pixel
 - **Display info** including metadata, page count, encryption status, attachments, and PDF version
 - **Rotate** pages by 90, 180, or 270 degrees
+- **Mirror** pages horizontally or vertically
 - **Delete** pages from PDFs
 - **Add** new pages with optional image or text content
 - **Attach** files as PDF attachments
@@ -134,7 +135,7 @@ Compare two PDFs visually by rendering and comparing pixels:
 pdfzig visual_diff original.pdf modified.pdf
 
 # Compare at higher resolution (default: 150 DPI)
-pdfzig visual_diff -d 300 doc1.pdf doc2.pdf
+pdfzig visual_diff -r 300 doc1.pdf doc2.pdf
 
 # Generate diff images showing differences
 pdfzig visual_diff -o ./diffs doc1.pdf doc2.pdf
@@ -184,9 +185,32 @@ pdfzig rotate -p 1,3,5 document.pdf 180
 
 # Rotate and save to a different file
 pdfzig rotate -o rotated.pdf document.pdf 270
+
+# Use aliases: right (90°) and left (-90°)
+pdfzig rotate document.pdf right
+pdfzig rotate document.pdf left
 ```
 
-Supported angles: `90`, `180`, `270` (clockwise)
+Supported angles: `90`, `180`, `270` (clockwise), or `left`/`right`
+
+### Mirror Pages
+
+```bash
+# Mirror all pages horizontally (left-right flip)
+pdfzig mirror document.pdf
+
+# Mirror vertically (up-down flip)
+pdfzig mirror --updown document.pdf
+
+# Mirror specific pages
+pdfzig mirror -p 1,3,5 document.pdf
+
+# Mirror both horizontally and vertically
+pdfzig mirror --leftright --updown document.pdf
+
+# Save to a different file
+pdfzig mirror -o mirrored.pdf document.pdf
+```
 
 ### Delete Pages
 
@@ -199,6 +223,9 @@ pdfzig delete document.pdf 1,3,5-10
 
 # Delete and save to a different file
 pdfzig delete -o trimmed.pdf document.pdf 1-3
+
+# Delete all pages (replaces with one empty page of same size as first page)
+pdfzig delete document.pdf
 ```
 
 ### Add Pages
@@ -208,7 +235,7 @@ pdfzig delete -o trimmed.pdf document.pdf 1-3
 pdfzig add document.pdf
 
 # Add an empty page at position 3
-pdfzig add -n 3 document.pdf
+pdfzig add -p 3 document.pdf
 
 # Add a page with an image (scaled to fit)
 pdfzig add document.pdf image.png
@@ -216,9 +243,21 @@ pdfzig add document.pdf image.png
 # Add a page with text content
 pdfzig add document.pdf notes.txt
 
-# Specify page size (default: same as previous page)
-pdfzig add -s 612x792 document.pdf
+# Specify page size using standard names
+pdfzig add -s A4 document.pdf
+pdfzig add -s Letter document.pdf
+
+# Use landscape orientation (append 'L')
+pdfzig add -s A4L document.pdf
+
+# Specify size with units
+pdfzig add -s 210x297mm document.pdf
+pdfzig add -s 8.5x11in document.pdf
 ```
+
+Supported page sizes: A0-A8, B0-B6, C4-C6, Letter, Legal, Tabloid, Ledger, Executive, Folio, Quarto, Statement
+
+Supported units: `mm`, `cm`, `in`/`inch`, `pt` (points, default)
 
 ### Attach Files
 
@@ -251,14 +290,14 @@ pdfzig detach -o clean.pdf -g "*.tmp" document.pdf
 
 ### Use a Specific PDFium Library
 
-The `-link` global option loads PDFium from a specific path instead of the default location:
+The `--link` global option loads PDFium from a specific path instead of the default location:
 
 ```bash
 # Use a specific PDFium library for a command
-pdfzig -link /path/to/libpdfium.dylib info document.pdf
+pdfzig --link /path/to/libpdfium.dylib info document.pdf
 
 # Works with any command
-pdfzig -link /usr/local/lib/libpdfium.dylib render document.pdf
+pdfzig --link /usr/local/lib/libpdfium.dylib render document.pdf
 ```
 
 The version number is automatically parsed from filenames matching the pattern `libpdfium_v{VERSION}.dylib` (or `.so`/`.dll` on other platforms).
@@ -272,6 +311,18 @@ pdfzig info -P mypassword encrypted.pdf
 pdfzig render -P mypassword encrypted.pdf
 pdfzig extract_text -P mypassword encrypted.pdf
 ```
+
+### Page Selection
+
+Many commands support the `-p` option to select specific pages. If not specified, the command operates on all pages.
+
+Page selection syntax:
+- Single page: `-p 5`
+- Multiple pages: `-p 1,3,5`
+- Page range: `-p 1-10`
+- Combined: `-p 1-5,8,10-12`
+
+Commands supporting `-p`: `render`, `extract_text`, `extract_images`, `rotate`, `mirror`
 
 ## Supported Platforms
 

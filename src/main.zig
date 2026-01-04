@@ -8,6 +8,7 @@
 //!   visual_diff         Compare two PDFs visually
 //!   info                Display PDF metadata and information
 //!   rotate              Rotate PDF pages
+//!   mirror              Mirror PDF pages
 //!   delete              Delete PDF pages
 //!   add                 Add new page to PDF
 //!   attach              Attach files to PDF
@@ -15,7 +16,7 @@
 //!   download_pdfium     Download PDFium library
 //!
 //! Global Options:
-//!   -link <path>           Link a specific PDFium library
+//!   --link <path>          Link a specific PDFium library
 
 const std = @import("std");
 const pdfium = @import("pdfium.zig");
@@ -35,6 +36,7 @@ const Command = enum {
     visual_diff,
     info,
     rotate,
+    mirror,
     delete,
     add,
     attach,
@@ -79,10 +81,10 @@ pub fn main() !void {
     var i: usize = 0;
     while (i < args_list.items.len) : (i += 1) {
         const arg = args_list.items[i];
-        if (std.mem.eql(u8, arg, "-link") or std.mem.eql(u8, arg, "--link")) {
+        if (std.mem.eql(u8, arg, "--link")) {
             i += 1;
             if (i >= args_list.items.len) {
-                try stderr.writeAll("Error: -link requires a library path argument\n");
+                try stderr.writeAll("Error: --link requires a library path argument\n");
                 try stderr.flush();
                 std.process.exit(1);
             }
@@ -150,6 +152,8 @@ pub fn main() !void {
         .info
     else if (std.mem.eql(u8, cmd_str, "rotate"))
         .rotate
+    else if (std.mem.eql(u8, cmd_str, "mirror"))
+        .mirror
     else if (std.mem.eql(u8, cmd_str, "delete"))
         .delete
     else if (std.mem.eql(u8, cmd_str, "add"))
@@ -197,6 +201,7 @@ pub fn main() !void {
         .visual_diff => runVisualDiffCommand(allocator, &cmd_arg_it, stdout, stderr),
         .info => try runInfoCommand(allocator, &cmd_arg_it, stdout, stderr),
         .rotate => try runRotateCommand(allocator, &cmd_arg_it, stdout, stderr),
+        .mirror => try runMirrorCommand(allocator, &cmd_arg_it, stdout, stderr),
         .delete => try runDeleteCommand(allocator, &cmd_arg_it, stdout, stderr),
         .add => try runAddCommand(allocator, &cmd_arg_it, stdout, stderr),
         .attach => try runAttachCommand(allocator, &cmd_arg_it, stdout, stderr),
@@ -231,6 +236,71 @@ const SliceArgIterator = struct {
         return true;
     }
 };
+
+/// Parse a page range string (e.g., "1-5,8,10-12") into a list of page numbers.
+/// If range_str is null, returns all pages from 1 to page_count.
+/// Returns error message on stderr and exits on invalid input.
+fn parsePageList(
+    allocator: std.mem.Allocator,
+    range_str: ?[]const u8,
+    page_count: u32,
+    stderr: *std.Io.Writer,
+) std.mem.Allocator.Error![]u32 {
+    var pages = std.array_list.Managed(u32).init(allocator);
+    errdefer pages.deinit();
+
+    if (range_str) |range| {
+        var range_it = std.mem.splitScalar(u8, range, ',');
+        while (range_it.next()) |part| {
+            const trimmed = std.mem.trim(u8, part, " ");
+            if (trimmed.len == 0) continue;
+
+            if (std.mem.indexOf(u8, trimmed, "-")) |dash_pos| {
+                const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
+                const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
+                const start = std.fmt.parseInt(u32, start_str, 10) catch {
+                    stderr.print("Invalid page range: {s}\n", .{part}) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                };
+                const end = std.fmt.parseInt(u32, end_str, 10) catch {
+                    stderr.print("Invalid page range: {s}\n", .{part}) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                };
+                if (start < 1 or end > page_count or start > end) {
+                    stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ part, page_count }) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                }
+                var p = start;
+                while (p <= end) : (p += 1) {
+                    try pages.append(p);
+                }
+            } else {
+                const page_num = std.fmt.parseInt(u32, trimmed, 10) catch {
+                    stderr.print("Invalid page number: {s}\n", .{trimmed}) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                };
+                if (page_num < 1 or page_num > page_count) {
+                    stderr.print("Invalid page number: {d} (document has {d} pages)\n", .{ page_num, page_count }) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                }
+                try pages.append(page_num);
+            }
+        }
+    } else {
+        // All pages
+        var p: u32 = 1;
+        while (p <= page_count) : (p += 1) {
+            try pages.append(p);
+        }
+    }
+
+    return pages.toOwnedSlice() catch unreachable;
+}
 
 // ============================================================================
 // Render Command
@@ -442,6 +512,18 @@ fn parseOutputSpec(spec_str: []const u8) !OutputSpec {
         .quality = quality,
         .template = template,
     };
+}
+
+/// Parse a resolution string with optional "dpi" suffix.
+/// Returns null if parsing fails.
+fn parseResolution(str: []const u8) ?f64 {
+    if (str.len == 0) return null;
+    const num_str = if (std.mem.endsWith(u8, str, "dpi"))
+        str[0 .. str.len - 3]
+    else
+        str;
+    if (num_str.len == 0) return null;
+    return std.fmt.parseFloat(f64, num_str) catch null;
 }
 
 // ============================================================================
@@ -943,14 +1025,14 @@ fn runVisualDiffCommand(
                 args.show_help = true;
             } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
                 args.quiet = true;
-            } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dpi")) {
-                const dpi_str = arg_it.next() orelse {
-                    stderr.writeAll("Error: --dpi requires an argument\n") catch {};
+            } else if (std.mem.eql(u8, arg, "-r") or std.mem.eql(u8, arg, "--resolution")) {
+                const res_str = arg_it.next() orelse {
+                    stderr.writeAll("Error: --resolution requires an argument\n") catch {};
                     stderr.flush() catch {};
                     std.process.exit(1);
                 };
-                args.dpi = std.fmt.parseFloat(f64, dpi_str) catch {
-                    stderr.print("Error: Invalid DPI value '{s}'\n", .{dpi_str}) catch {};
+                args.dpi = parseResolution(res_str) orelse {
+                    stderr.print("Error: Invalid resolution value '{s}'\n", .{res_str}) catch {};
                     stderr.flush() catch {};
                     std.process.exit(1);
                 };
@@ -1483,12 +1565,19 @@ fn runRotateCommand(
         } else if (args.input_path == null) {
             args.input_path = arg;
         } else if (args.rotation == null) {
-            // Parse rotation angle
-            args.rotation = std.fmt.parseInt(i32, arg, 10) catch {
-                try stderr.print("Invalid rotation angle: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
-            };
+            // Parse rotation angle or alias
+            if (std.mem.eql(u8, arg, "left")) {
+                args.rotation = 270;
+            } else if (std.mem.eql(u8, arg, "right")) {
+                args.rotation = 90;
+            } else {
+                args.rotation = std.fmt.parseInt(i32, arg, 10) catch {
+                    try stderr.print("Invalid rotation angle: {s}\n", .{arg});
+                    try stderr.writeAll("Use: 90, 180, 270, -90, -180, -270, left, or right\n");
+                    try stderr.flush();
+                    std.process.exit(1);
+                };
+            }
         }
     }
 
@@ -1555,60 +1644,11 @@ fn runRotateCommand(
     const page_count = doc.getPageCount();
 
     // Parse page range or use all pages
-    var pages_to_rotate = std.array_list.Managed(u32).init(allocator);
-    defer pages_to_rotate.deinit();
-
-    if (args.page_range) |range| {
-        // Parse page range (e.g., "1-5,8,10-12")
-        var range_it = std.mem.splitScalar(u8, range, ',');
-        while (range_it.next()) |part| {
-            const trimmed = std.mem.trim(u8, part, " ");
-            if (std.mem.indexOf(u8, trimmed, "-")) |dash_pos| {
-                const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
-                const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
-                const start = std.fmt.parseInt(u32, start_str, 10) catch {
-                    try stderr.print("Invalid page range: {s}\n", .{part});
-                    try stderr.flush();
-                    std.process.exit(1);
-                };
-                const end = std.fmt.parseInt(u32, end_str, 10) catch {
-                    try stderr.print("Invalid page range: {s}\n", .{part});
-                    try stderr.flush();
-                    std.process.exit(1);
-                };
-                if (start < 1 or end > page_count or start > end) {
-                    try stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ part, page_count });
-                    try stderr.flush();
-                    std.process.exit(1);
-                }
-                var p = start;
-                while (p <= end) : (p += 1) {
-                    try pages_to_rotate.append(p);
-                }
-            } else {
-                const page_num = std.fmt.parseInt(u32, trimmed, 10) catch {
-                    try stderr.print("Invalid page number: {s}\n", .{trimmed});
-                    try stderr.flush();
-                    std.process.exit(1);
-                };
-                if (page_num < 1 or page_num > page_count) {
-                    try stderr.print("Invalid page number: {d} (document has {d} pages)\n", .{ page_num, page_count });
-                    try stderr.flush();
-                    std.process.exit(1);
-                }
-                try pages_to_rotate.append(page_num);
-            }
-        }
-    } else {
-        // Rotate all pages
-        var p: u32 = 1;
-        while (p <= page_count) : (p += 1) {
-            try pages_to_rotate.append(p);
-        }
-    }
+    const pages_to_rotate = try parsePageList(allocator, args.page_range, page_count, stderr);
+    defer allocator.free(pages_to_rotate);
 
     // Rotate each specified page
-    for (pages_to_rotate.items) |page_num| {
+    for (pages_to_rotate) |page_num| {
         var page = doc.loadPage(page_num - 1) catch |err| {
             try stderr.print("Error loading page {d}: {}\n", .{ page_num, err });
             try stderr.flush();
@@ -1647,10 +1687,10 @@ fn runRotateCommand(
     }
 
     // Report success
-    if (pages_to_rotate.items.len == page_count) {
+    if (pages_to_rotate.len == page_count) {
         try stdout.print("Rotated all {d} pages by {d}°\n", .{ page_count, rotation });
     } else {
-        try stdout.print("Rotated {d} page(s) by {d}°\n", .{ pages_to_rotate.items.len, rotation });
+        try stdout.print("Rotated {d} page(s) by {d}°\n", .{ pages_to_rotate.len, rotation });
     }
 
     if (!std.mem.eql(u8, output_path, input_path)) {
@@ -1666,7 +1706,8 @@ fn printRotateUsage(stdout: *std.Io.Writer) void {
         \\
         \\Arguments:
         \\  input.pdf             Input PDF file
-        \\  degrees               Rotation angle: 90, 180, 270 (or -90, -180, -270)
+        \\  degrees               Rotation: 90, 180, 270, -90, -180, -270, left, right
+        \\                        (left = -90°, right = 90°)
         \\
         \\Options:
         \\  -o, --output <file>   Output file (default: overwrite input)
@@ -1675,10 +1716,217 @@ fn printRotateUsage(stdout: *std.Io.Writer) void {
         \\  -h, --help            Show this help message
         \\
         \\Examples:
-        \\  pdfzig rotate document.pdf 90              # Rotate all pages 90° clockwise
-        \\  pdfzig rotate document.pdf -90             # Rotate all pages 90° counter-clockwise
-        \\  pdfzig rotate -p 1,3 document.pdf 180      # Rotate pages 1 and 3 by 180°
-        \\  pdfzig rotate -o out.pdf document.pdf 270  # Rotate and save to new file
+        \\  pdfzig rotate document.pdf right           # Rotate all pages 90° clockwise
+        \\  pdfzig rotate document.pdf left            # Rotate all pages 90° counter-clockwise
+        \\  pdfzig rotate document.pdf 180             # Rotate all pages 180°
+        \\  pdfzig rotate -p 1,3 document.pdf 90       # Rotate pages 1 and 3 by 90°
+        \\  pdfzig rotate -o out.pdf document.pdf left # Rotate and save to new file
+        \\
+    ) catch {};
+}
+
+// ============================================================================
+// Mirror Command
+// ============================================================================
+
+const MirrorArgs = struct {
+    input_path: ?[]const u8 = null,
+    output_path: ?[]const u8 = null,
+    page_range: ?[]const u8 = null,
+    password: ?[]const u8 = null,
+    updown: bool = false,
+    leftright: bool = false,
+    show_help: bool = false,
+};
+
+fn runMirrorCommand(
+    allocator: std.mem.Allocator,
+    arg_it: *SliceArgIterator,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    var args = MirrorArgs{};
+
+    while (arg_it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                args.show_help = true;
+            } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+                args.output_path = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--pages")) {
+                args.page_range = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
+                args.password = arg_it.next();
+            } else if (std.mem.eql(u8, arg, "--updown")) {
+                args.updown = true;
+            } else if (std.mem.eql(u8, arg, "--leftright")) {
+                args.leftright = true;
+            } else {
+                try stderr.print("Unknown option: {s}\n", .{arg});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else if (args.input_path == null) {
+            args.input_path = arg;
+        }
+    }
+
+    if (args.show_help) {
+        printMirrorUsage(stdout);
+        return;
+    }
+
+    const input_path = args.input_path orelse {
+        try stderr.writeAll("Error: No input PDF file specified\n\n");
+        try stderr.flush();
+        printMirrorUsage(stdout);
+        std.process.exit(1);
+    };
+
+    // Default to leftright if neither specified
+    if (!args.updown and !args.leftright) {
+        args.leftright = true;
+    }
+
+    // Determine output path
+    const output_path = args.output_path orelse input_path;
+    const overwrite_original = args.output_path == null;
+
+    // If overwriting, we need to save to a temp file first
+    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const actual_output_path = if (overwrite_original) blk: {
+        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
+            try stderr.writeAll("Error: Path too long\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        break :blk temp_path;
+    } else output_path;
+
+    // Open the document
+    var doc = if (args.password) |pwd|
+        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
+            try stderr.print("Error opening PDF: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    else
+        pdfium.Document.open(input_path) catch |err| {
+            if (err == pdfium.Error.PasswordRequired) {
+                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
+            } else {
+                try stderr.print("Error opening PDF: {}\n", .{err});
+            }
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    defer doc.close();
+
+    const page_count = doc.getPageCount();
+
+    // Parse page range or use all pages
+    const pages_to_mirror = try parsePageList(allocator, args.page_range, page_count, stderr);
+    defer allocator.free(pages_to_mirror);
+
+    // Mirror each specified page
+    for (pages_to_mirror) |page_num| {
+        var page = doc.loadPage(page_num - 1) catch |err| {
+            try stderr.print("Error loading page {d}: {}\n", .{ page_num, err });
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        defer page.close();
+
+        const page_width = page.getWidth();
+        const page_height = page.getHeight();
+
+        // Apply transformations to all objects on the page
+        const obj_count = page.getObjectCount();
+        var obj_idx: u32 = 0;
+        while (obj_idx < obj_count) : (obj_idx += 1) {
+            if (page.getObject(obj_idx)) |obj| {
+                // Apply left-right mirror first if requested
+                if (args.leftright) {
+                    // Mirror horizontally: scale X by -1, translate by page width
+                    obj.transform(-1, 0, 0, 1, page_width, 0);
+                }
+                // Apply up-down mirror second if requested
+                if (args.updown) {
+                    // Mirror vertically: scale Y by -1, translate by page height
+                    obj.transform(1, 0, 0, -1, 0, page_height);
+                }
+            }
+        }
+
+        if (!page.generateContent()) {
+            try stderr.print("Error generating content for page {d}\n", .{page_num});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Save the document
+    doc.saveWithVersion(actual_output_path, null) catch |err| {
+        try stderr.print("Error saving PDF: {}\n", .{err});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // If overwriting original, rename temp file to original
+    if (overwrite_original) {
+        std.fs.cwd().deleteFile(input_path) catch {};
+        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
+            try stderr.print("Error replacing original file: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    // Report success
+    const mirror_type: []const u8 = if (args.leftright and args.updown)
+        "left-right and up-down"
+    else if (args.updown)
+        "up-down"
+    else
+        "left-right";
+
+    if (pages_to_mirror.len == page_count) {
+        try stdout.print("Mirrored all {d} pages ({s})\n", .{ page_count, mirror_type });
+    } else {
+        try stdout.print("Mirrored {d} page(s) ({s})\n", .{ pages_to_mirror.len, mirror_type });
+    }
+
+    if (!std.mem.eql(u8, output_path, input_path)) {
+        try stdout.print("Saved to: {s}\n", .{output_path});
+    }
+}
+
+fn printMirrorUsage(stdout: *std.Io.Writer) void {
+    stdout.writeAll(
+        \\Usage: pdfzig mirror [options] <input.pdf>
+        \\
+        \\Mirror PDF pages horizontally (left-right) or vertically (up-down).
+        \\
+        \\Arguments:
+        \\  input.pdf               Input PDF file
+        \\
+        \\Options:
+        \\  --leftright             Mirror left to right (horizontal flip)
+        \\  --updown                Mirror up to down (vertical flip)
+        \\  -o, --output <file>     Output file (default: overwrite input)
+        \\  -p, --pages <range>     Pages to mirror (e.g., "1-5,8,10-12", default: all)
+        \\  -P, --password <pwd>    Password for encrypted PDFs
+        \\  -h, --help              Show this help message
+        \\
+        \\If neither --leftright nor --updown is specified, defaults to --leftright.
+        \\Both options can be used together; transformations are applied in order.
+        \\
+        \\Examples:
+        \\  pdfzig mirror document.pdf                      # Mirror all pages left-right
+        \\  pdfzig mirror --updown document.pdf             # Mirror all pages up-down
+        \\  pdfzig mirror --leftright --updown document.pdf # Apply both transforms
+        \\  pdfzig mirror -p 1,3 document.pdf             # Mirror pages 1 and 3
+        \\  pdfzig mirror -o out.pdf document.pdf         # Mirror and save to new file
         \\
     ) catch {};
 }
@@ -1709,8 +1957,6 @@ fn runDeleteCommand(
                 args.show_help = true;
             } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
                 args.output_path = arg_it.next();
-            } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--pages")) {
-                args.page_range = arg_it.next();
             } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
                 args.password = arg_it.next();
             } else {
@@ -1720,6 +1966,8 @@ fn runDeleteCommand(
             }
         } else if (args.input_path == null) {
             args.input_path = arg;
+        } else if (args.page_range == null) {
+            args.page_range = arg;
         }
     }
 
@@ -1730,13 +1978,6 @@ fn runDeleteCommand(
 
     const input_path = args.input_path orelse {
         try stderr.writeAll("Error: No input PDF file specified\n\n");
-        try stderr.flush();
-        printDeleteUsage(stdout);
-        std.process.exit(1);
-    };
-
-    const page_range = args.page_range orelse {
-        try stderr.writeAll("Error: No pages specified for deletion. Use -p to specify pages.\n\n");
         try stderr.flush();
         printDeleteUsage(stdout);
         std.process.exit(1);
@@ -1778,78 +2019,76 @@ fn runDeleteCommand(
 
     const page_count = doc.getPageCount();
 
-    // Parse page range to get pages to delete
-    var pages_to_delete = std.array_list.Managed(u32).init(allocator);
-    defer pages_to_delete.deinit();
-
-    // Parse page range (e.g., "1-5,8,10-12")
-    var range_it = std.mem.splitScalar(u8, page_range, ',');
-    while (range_it.next()) |part| {
-        const trimmed = std.mem.trim(u8, part, " ");
-        if (std.mem.indexOf(u8, trimmed, "-")) |dash_pos| {
-            const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
-            const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
-            const start = std.fmt.parseInt(u32, start_str, 10) catch {
-                try stderr.print("Invalid page range: {s}\n", .{part});
-                try stderr.flush();
-                std.process.exit(1);
-            };
-            const end = std.fmt.parseInt(u32, end_str, 10) catch {
-                try stderr.print("Invalid page range: {s}\n", .{part});
-                try stderr.flush();
-                std.process.exit(1);
-            };
-            if (start < 1 or end > page_count or start > end) {
-                try stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ part, page_count });
-                try stderr.flush();
-                std.process.exit(1);
-            }
-            var p = start;
-            while (p <= end) : (p += 1) {
-                try pages_to_delete.append(p);
-            }
-        } else {
-            const page_num = std.fmt.parseInt(u32, trimmed, 10) catch {
-                try stderr.print("Invalid page number: {s}\n", .{trimmed});
-                try stderr.flush();
-                std.process.exit(1);
-            };
-            if (page_num < 1 or page_num > page_count) {
-                try stderr.print("Invalid page number: {d} (document has {d} pages)\n", .{ page_num, page_count });
-                try stderr.flush();
-                std.process.exit(1);
-            }
-            try pages_to_delete.append(page_num);
+    // Handle "delete all pages" case - replace with single empty page
+    if (args.page_range == null) {
+        // Get dimensions of first page
+        var first_page_width: f64 = 612; // Default letter size
+        var first_page_height: f64 = 792;
+        if (page_count > 0) {
+            if (doc.loadPage(0)) |fp| {
+                var first_page = fp;
+                first_page_width = first_page.getWidth();
+                first_page_height = first_page.getHeight();
+                first_page.close();
+            } else |_| {}
         }
+
+        // Delete all pages (in reverse order)
+        var p = page_count;
+        while (p > 0) : (p -= 1) {
+            doc.deletePage(p - 1) catch {};
+        }
+
+        // Insert one empty page with same dimensions
+        _ = doc.createPage(0, first_page_width, first_page_height) catch {
+            try stderr.writeAll("Error: Could not create empty page\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        // Save the document
+        doc.saveWithVersion(actual_output_path, null) catch |err| {
+            try stderr.print("Error saving PDF: {}\n", .{err});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        // If overwriting original, rename temp file to original
+        if (overwrite_original) {
+            std.fs.cwd().deleteFile(input_path) catch {};
+            std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
+                try stderr.print("Error replacing original file: {}\n", .{err});
+                try stderr.flush();
+                std.process.exit(1);
+            };
+        }
+
+        try stdout.print("Deleted all {d} pages, created empty page ({d}x{d})\n", .{ page_count, @as(u32, @intFromFloat(first_page_width)), @as(u32, @intFromFloat(first_page_height)) });
+        if (!std.mem.eql(u8, output_path, input_path)) {
+            try stdout.print("Saved to: {s}\n", .{output_path});
+        }
+        return;
     }
 
-    // Check we're not deleting all pages
-    if (pages_to_delete.items.len >= page_count) {
-        try stderr.writeAll("Error: Cannot delete all pages from a PDF\n");
+    // Parse page range to get pages to delete
+    const pages_to_delete = try parsePageList(allocator, args.page_range, page_count, stderr);
+    defer allocator.free(pages_to_delete);
+
+    // Check if trying to delete all pages
+    if (pages_to_delete.len >= page_count) {
+        try stderr.writeAll("Error: Cannot delete all pages. Omit page range to replace all pages with an empty page.\n");
         try stderr.flush();
         std.process.exit(1);
     }
 
-    // Sort in descending order so we delete from the end first
+    // Sort pages in descending order so we delete from the end first
     // (to avoid index shifting issues)
-    std.mem.sort(u32, pages_to_delete.items, {}, std.sort.desc(u32));
+    std.mem.sort(u32, pages_to_delete, {}, std.sort.desc(u32));
 
-    // Remove duplicates (keeping sorted descending order)
-    var unique_count: usize = 0;
-    var last_value: ?u32 = null;
-    for (pages_to_delete.items) |val| {
-        if (last_value == null or val != last_value.?) {
-            pages_to_delete.items[unique_count] = val;
-            unique_count += 1;
-            last_value = val;
-        }
-    }
-    pages_to_delete.items.len = unique_count;
-
-    const deleted_count = pages_to_delete.items.len;
+    const deleted_count = pages_to_delete.len;
 
     // Delete pages (from highest to lowest index to avoid shifting issues)
-    for (pages_to_delete.items) |page_num| {
+    for (pages_to_delete) |page_num| {
         doc.deletePage(page_num - 1) catch |err| {
             try stderr.print("Error deleting page {d}: {}\n", .{ page_num, err });
             try stderr.flush();
@@ -1910,7 +2149,304 @@ fn printDeleteUsage(stdout: *std.Io.Writer) void {
 // Add Command
 // ============================================================================
 
-const PageSize = struct { width: f64, height: f64 };
+const PageSize = struct {
+    width: f64,
+    height: f64,
+
+    /// Unit conversion factors to PDF points (1 inch = 72 points)
+    const pt_per_mm: f64 = 72.0 / 25.4;
+    const pt_per_cm: f64 = 72.0 / 2.54;
+    const pt_per_inch: f64 = 72.0;
+
+    /// Standard paper sizes (width x height in points, portrait orientation)
+    pub const StandardSize = enum {
+        // ISO A series
+        a0,
+        a1,
+        a2,
+        a3,
+        a4,
+        a5,
+        a6,
+        a7,
+        a8,
+        // ISO B series
+        b0,
+        b1,
+        b2,
+        b3,
+        b4,
+        b5,
+        b6,
+        // ISO C series (envelopes)
+        c4,
+        c5,
+        c6,
+        // US sizes
+        letter,
+        legal,
+        tabloid,
+        ledger,
+        executive,
+        // Other common sizes
+        folio,
+        quarto,
+        statement,
+
+        pub fn getSize(self: StandardSize) PageSize {
+            return switch (self) {
+                // ISO A series (mm converted to points)
+                .a0 => .{ .width = 841 * pt_per_mm, .height = 1189 * pt_per_mm },
+                .a1 => .{ .width = 594 * pt_per_mm, .height = 841 * pt_per_mm },
+                .a2 => .{ .width = 420 * pt_per_mm, .height = 594 * pt_per_mm },
+                .a3 => .{ .width = 297 * pt_per_mm, .height = 420 * pt_per_mm },
+                .a4 => .{ .width = 210 * pt_per_mm, .height = 297 * pt_per_mm },
+                .a5 => .{ .width = 148 * pt_per_mm, .height = 210 * pt_per_mm },
+                .a6 => .{ .width = 105 * pt_per_mm, .height = 148 * pt_per_mm },
+                .a7 => .{ .width = 74 * pt_per_mm, .height = 105 * pt_per_mm },
+                .a8 => .{ .width = 52 * pt_per_mm, .height = 74 * pt_per_mm },
+                // ISO B series
+                .b0 => .{ .width = 1000 * pt_per_mm, .height = 1414 * pt_per_mm },
+                .b1 => .{ .width = 707 * pt_per_mm, .height = 1000 * pt_per_mm },
+                .b2 => .{ .width = 500 * pt_per_mm, .height = 707 * pt_per_mm },
+                .b3 => .{ .width = 353 * pt_per_mm, .height = 500 * pt_per_mm },
+                .b4 => .{ .width = 250 * pt_per_mm, .height = 353 * pt_per_mm },
+                .b5 => .{ .width = 176 * pt_per_mm, .height = 250 * pt_per_mm },
+                .b6 => .{ .width = 125 * pt_per_mm, .height = 176 * pt_per_mm },
+                // ISO C series (envelopes)
+                .c4 => .{ .width = 229 * pt_per_mm, .height = 324 * pt_per_mm },
+                .c5 => .{ .width = 162 * pt_per_mm, .height = 229 * pt_per_mm },
+                .c6 => .{ .width = 114 * pt_per_mm, .height = 162 * pt_per_mm },
+                // US sizes (inches converted to points)
+                .letter => .{ .width = 8.5 * pt_per_inch, .height = 11 * pt_per_inch },
+                .legal => .{ .width = 8.5 * pt_per_inch, .height = 14 * pt_per_inch },
+                .tabloid => .{ .width = 11 * pt_per_inch, .height = 17 * pt_per_inch },
+                .ledger => .{ .width = 17 * pt_per_inch, .height = 11 * pt_per_inch },
+                .executive => .{ .width = 7.25 * pt_per_inch, .height = 10.5 * pt_per_inch },
+                // Other common sizes
+                .folio => .{ .width = 8.5 * pt_per_inch, .height = 13 * pt_per_inch },
+                .quarto => .{ .width = 8 * pt_per_inch, .height = 10 * pt_per_inch },
+                .statement => .{ .width = 5.5 * pt_per_inch, .height = 8.5 * pt_per_inch },
+            };
+        }
+
+        pub fn fromString(str: []const u8) ?StandardSize {
+            const lower = blk: {
+                var buf: [16]u8 = undefined;
+                if (str.len > buf.len) return null;
+                for (str, 0..) |c, i| {
+                    buf[i] = std.ascii.toLower(c);
+                }
+                break :blk buf[0..str.len];
+            };
+
+            if (std.mem.eql(u8, lower, "a0")) return .a0;
+            if (std.mem.eql(u8, lower, "a1")) return .a1;
+            if (std.mem.eql(u8, lower, "a2")) return .a2;
+            if (std.mem.eql(u8, lower, "a3")) return .a3;
+            if (std.mem.eql(u8, lower, "a4")) return .a4;
+            if (std.mem.eql(u8, lower, "a5")) return .a5;
+            if (std.mem.eql(u8, lower, "a6")) return .a6;
+            if (std.mem.eql(u8, lower, "a7")) return .a7;
+            if (std.mem.eql(u8, lower, "a8")) return .a8;
+            if (std.mem.eql(u8, lower, "b0")) return .b0;
+            if (std.mem.eql(u8, lower, "b1")) return .b1;
+            if (std.mem.eql(u8, lower, "b2")) return .b2;
+            if (std.mem.eql(u8, lower, "b3")) return .b3;
+            if (std.mem.eql(u8, lower, "b4")) return .b4;
+            if (std.mem.eql(u8, lower, "b5")) return .b5;
+            if (std.mem.eql(u8, lower, "b6")) return .b6;
+            if (std.mem.eql(u8, lower, "c4")) return .c4;
+            if (std.mem.eql(u8, lower, "c5")) return .c5;
+            if (std.mem.eql(u8, lower, "c6")) return .c6;
+            if (std.mem.eql(u8, lower, "letter")) return .letter;
+            if (std.mem.eql(u8, lower, "legal")) return .legal;
+            if (std.mem.eql(u8, lower, "tabloid")) return .tabloid;
+            if (std.mem.eql(u8, lower, "ledger")) return .ledger;
+            if (std.mem.eql(u8, lower, "executive")) return .executive;
+            if (std.mem.eql(u8, lower, "folio")) return .folio;
+            if (std.mem.eql(u8, lower, "quarto")) return .quarto;
+            if (std.mem.eql(u8, lower, "statement")) return .statement;
+            return null;
+        }
+    };
+
+    pub fn landscape(self: PageSize) PageSize {
+        return .{ .width = self.height, .height = self.width };
+    }
+
+    /// Parse a page size string. Supported formats:
+    /// - Standard names: "A4", "Letter", "Legal", etc.
+    /// - Standard names with L suffix for landscape: "A4L", "LetterL"
+    /// - Dimensions with units: "210x297mm", "8.5x11inch", "612x792pt", "21x29.7cm"
+    /// - Dimensions without units (assumes points): "612x792"
+    pub fn parse(str: []const u8) ?PageSize {
+        if (str.len == 0) return null;
+
+        // First try to parse as standard size name (without landscape suffix)
+        if (StandardSize.fromString(str)) |std_size| {
+            return std_size.getSize();
+        }
+
+        // Check for landscape suffix - only if it's not a dimension (no 'x')
+        if (str.len > 1 and std.mem.indexOf(u8, str, "x") == null) {
+            if (str[str.len - 1] == 'L' or str[str.len - 1] == 'l') {
+                const name = str[0 .. str.len - 1];
+                if (StandardSize.fromString(name)) |std_size| {
+                    return std_size.getSize().landscape();
+                }
+            }
+        }
+
+        // Parse as WIDTHxHEIGHT with optional unit suffix
+        const x_pos = std.mem.indexOf(u8, str, "x") orelse return null;
+        if (x_pos == 0 or x_pos >= str.len - 1) return null;
+
+        const width_part = str[0..x_pos];
+        const height_and_unit = str[x_pos + 1 ..];
+
+        // Determine unit and extract height number
+        var unit_factor: f64 = 1.0; // default: points
+        var height_part: []const u8 = height_and_unit;
+
+        if (std.mem.endsWith(u8, height_and_unit, "mm")) {
+            unit_factor = pt_per_mm;
+            height_part = height_and_unit[0 .. height_and_unit.len - 2];
+        } else if (std.mem.endsWith(u8, height_and_unit, "cm")) {
+            unit_factor = pt_per_cm;
+            height_part = height_and_unit[0 .. height_and_unit.len - 2];
+        } else if (std.mem.endsWith(u8, height_and_unit, "inch")) {
+            unit_factor = pt_per_inch;
+            height_part = height_and_unit[0 .. height_and_unit.len - 4];
+        } else if (std.mem.endsWith(u8, height_and_unit, "in")) {
+            unit_factor = pt_per_inch;
+            height_part = height_and_unit[0 .. height_and_unit.len - 2];
+        } else if (std.mem.endsWith(u8, height_and_unit, "pt")) {
+            unit_factor = 1.0;
+            height_part = height_and_unit[0 .. height_and_unit.len - 2];
+        }
+
+        const width = std.fmt.parseFloat(f64, width_part) catch return null;
+        const height = std.fmt.parseFloat(f64, height_part) catch return null;
+
+        if (width <= 0 or height <= 0) return null;
+
+        return .{
+            .width = width * unit_factor,
+            .height = height * unit_factor,
+        };
+    }
+};
+
+test "PageSize.parse standard sizes" {
+    // A4 portrait
+    const a4 = PageSize.parse("A4").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 595.28), a4.width, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f64, 841.89), a4.height, 0.5);
+
+    // A4 landscape
+    const a4l = PageSize.parse("A4L").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 841.89), a4l.width, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f64, 595.28), a4l.height, 0.5);
+
+    // Letter
+    const letter = PageSize.parse("Letter").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 612.0), letter.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 792.0), letter.height, 0.1);
+
+    // Letter landscape (lowercase)
+    const letterl = PageSize.parse("letterl").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 792.0), letterl.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 612.0), letterl.height, 0.1);
+
+    // Legal
+    const legal = PageSize.parse("LEGAL").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 612.0), legal.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 1008.0), legal.height, 0.1);
+}
+
+test "PageSize.parse with units" {
+    // Millimeters
+    const mm = PageSize.parse("210x297mm").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 595.28), mm.width, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f64, 841.89), mm.height, 0.5);
+
+    // Centimeters
+    const cm = PageSize.parse("21x29.7cm").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 595.28), cm.width, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f64, 841.89), cm.height, 0.5);
+
+    // Inches
+    const inch = PageSize.parse("8.5x11inch").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 612.0), inch.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 792.0), inch.height, 0.1);
+
+    // Inches (short form)
+    const in_short = PageSize.parse("8.5x11in").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 612.0), in_short.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 792.0), in_short.height, 0.1);
+
+    // Points explicit
+    const pt = PageSize.parse("612x792pt").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 612.0), pt.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 792.0), pt.height, 0.1);
+
+    // Points implicit (no unit)
+    const no_unit = PageSize.parse("612x792").?;
+    try std.testing.expectApproxEqAbs(@as(f64, 612.0), no_unit.width, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 792.0), no_unit.height, 0.1);
+}
+
+test "PageSize.parse invalid inputs" {
+    try std.testing.expect(PageSize.parse("") == null);
+    try std.testing.expect(PageSize.parse("invalid") == null);
+    try std.testing.expect(PageSize.parse("x100") == null);
+    try std.testing.expect(PageSize.parse("100x") == null);
+    try std.testing.expect(PageSize.parse("100") == null);
+    try std.testing.expect(PageSize.parse("abcxdef") == null);
+}
+
+test "parseOutputSpec valid specs" {
+    const spec1 = try parseOutputSpec("300:png:0:page_{num}.png");
+    try std.testing.expectApproxEqAbs(@as(f64, 300.0), spec1.dpi, 0.1);
+    try std.testing.expectEqual(image_writer.Format.png, spec1.format);
+    try std.testing.expectEqual(@as(u8, 0), spec1.quality);
+    try std.testing.expectEqualStrings("page_{num}.png", spec1.template);
+
+    const spec2 = try parseOutputSpec("150:jpeg:85:thumb_{num0}.jpg");
+    try std.testing.expectApproxEqAbs(@as(f64, 150.0), spec2.dpi, 0.1);
+    try std.testing.expectEqual(image_writer.Format.jpeg, spec2.format);
+    try std.testing.expectEqual(@as(u8, 85), spec2.quality);
+    try std.testing.expectEqualStrings("thumb_{num0}.jpg", spec2.template);
+
+    const spec3 = try parseOutputSpec("72:jpg:90:output.jpg");
+    try std.testing.expectEqual(image_writer.Format.jpeg, spec3.format);
+}
+
+test "parseOutputSpec invalid specs" {
+    try std.testing.expectError(error.InvalidSpec, parseOutputSpec(""));
+    try std.testing.expectError(error.InvalidSpec, parseOutputSpec("300"));
+    try std.testing.expectError(error.InvalidSpec, parseOutputSpec("300:png"));
+    try std.testing.expectError(error.InvalidSpec, parseOutputSpec("300:png:0"));
+    try std.testing.expectError(error.InvalidSpec, parseOutputSpec("abc:png:0:file.png"));
+    try std.testing.expectError(error.InvalidSpec, parseOutputSpec("300:xyz:0:file.png"));
+    try std.testing.expectError(error.InvalidSpec, parseOutputSpec("300:png:abc:file.png"));
+}
+
+test "parseResolution valid values" {
+    try std.testing.expectApproxEqAbs(@as(f64, 300.0), parseResolution("300").?, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 300.0), parseResolution("300dpi").?, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 150.5), parseResolution("150.5").?, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 150.5), parseResolution("150.5dpi").?, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 72.0), parseResolution("72dpi").?, 0.1);
+}
+
+test "parseResolution invalid values" {
+    try std.testing.expect(parseResolution("") == null);
+    try std.testing.expect(parseResolution("abc") == null);
+    try std.testing.expect(parseResolution("abcdpi") == null);
+    try std.testing.expect(parseResolution("dpi") == null);
+}
 
 const AddArgs = struct {
     input_path: ?[]const u8 = null,
@@ -1946,24 +2482,13 @@ fn runAddCommand(
                 }
             } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--size")) {
                 if (arg_it.next()) |size_str| {
-                    // Parse "WIDTHxHEIGHT" format
-                    if (std.mem.indexOf(u8, size_str, "x")) |x_pos| {
-                        const width = std.fmt.parseFloat(f64, size_str[0..x_pos]) catch {
-                            try stderr.print("Invalid size format: {s}\n", .{size_str});
-                            try stderr.flush();
-                            std.process.exit(1);
-                        };
-                        const height = std.fmt.parseFloat(f64, size_str[x_pos + 1 ..]) catch {
-                            try stderr.print("Invalid size format: {s}\n", .{size_str});
-                            try stderr.flush();
-                            std.process.exit(1);
-                        };
-                        args.page_size = .{ .width = width, .height = height };
-                    } else {
-                        try stderr.print("Invalid size format: {s} (use WIDTHxHEIGHT, e.g., 612x792)\n", .{size_str});
+                    args.page_size = PageSize.parse(size_str) orelse {
+                        try stderr.print("Invalid size: {s}\n", .{size_str});
+                        try stderr.print("Use: A4, Letter, 210x297mm, 8.5x11in, 612x792pt, or 612x792\n", .{});
+                        try stderr.print("Add 'L' suffix for landscape: A4L, LetterL\n", .{});
                         try stderr.flush();
                         std.process.exit(1);
-                    }
+                    };
                 }
             } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
                 args.password = arg_it.next();
@@ -2347,10 +2872,16 @@ fn printAddUsage(stdout: *std.Io.Writer) void {
         \\
         \\Options:
         \\  -p, --page <num>      Page number to insert at (default: end)
-        \\  -s, --size <WxH>      Page size in points, e.g., "612x792" (default: previous page or US Letter)
+        \\  -s, --size <SIZE>     Page size (default: previous page or US Letter)
         \\  -o, --output <file>   Output file (default: overwrite input)
         \\  -P, --password <pwd>  Password for encrypted PDFs
         \\  -h, --help            Show this help message
+        \\
+        \\Size formats:
+        \\  Standard names: A0-A8, B0-B6, C4-C6, Letter, Legal, Tabloid, Ledger, Executive
+        \\  With units: 210x297mm, 8.5x11in, 21x29.7cm, 612x792pt
+        \\  Points only: 612x792
+        \\  Landscape: A4L, LetterL (append 'L' for landscape orientation)
         \\
         \\Supported image formats: PNG, JPEG, BMP, TGA, PBM, PGM, PPM
         \\
@@ -2358,7 +2889,9 @@ fn printAddUsage(stdout: *std.Io.Writer) void {
         \\  pdfzig add document.pdf                        # Add empty page at end
         \\  pdfzig add -p 1 document.pdf                   # Insert empty page at beginning
         \\  pdfzig add document.pdf image.png              # Add page with image
-        \\  pdfzig add -s 595x842 document.pdf             # Add A4-sized page
+        \\  pdfzig add -s A4 document.pdf                  # Add A4-sized page
+        \\  pdfzig add -s A4L document.pdf                 # Add A4 landscape page
+        \\  pdfzig add -s 200x300mm document.pdf           # Add page with custom size
         \\  pdfzig add document.pdf notes.txt              # Add page with text content
         \\  pdfzig add -o out.pdf document.pdf photo.jpg   # Add and save to new file
         \\
@@ -2825,6 +3358,7 @@ fn printMainUsage(stdout: *std.Io.Writer, pdfium_version: ?u32) void {
         \\  visual_diff         Compare two PDFs visually
         \\  info                Display PDF metadata and information
         \\  rotate              Rotate PDF pages
+        \\  mirror              Mirror PDF pages
         \\  delete              Delete PDF pages
         \\  add                 Add new page to PDF
         \\  attach              Attach files to PDF
@@ -2832,7 +3366,7 @@ fn printMainUsage(stdout: *std.Io.Writer, pdfium_version: ?u32) void {
         \\  download_pdfium     Download PDFium library
         \\
         \\Global Options:
-        \\  -link <path>           Load PDFium library from specified path
+        \\  --link <path>          Load PDFium library from specified path
         \\  -h, --help             Show this help message
         \\  -v, --version          Show version
         \\
@@ -2954,7 +3488,7 @@ fn printVisualDiffUsage(stdout: *std.Io.Writer) void {
         \\Returns exit code 0 if PDFs are identical, 1 if different.
         \\
         \\Options:
-        \\  -d, --dpi <N>         Resolution for comparison (default: 150)
+        \\  -r, --resolution <N>  Resolution in DPI for comparison (default: 150)
         \\  -o, --output <DIR>    Output directory for diff images
         \\  -P, --password <PW>   Password (use twice for both PDFs)
         \\  --password1 <PW>      Password for first PDF
@@ -2968,7 +3502,7 @@ fn printVisualDiffUsage(stdout: *std.Io.Writer) void {
         \\
         \\Examples:
         \\  pdfzig visual_diff original.pdf modified.pdf
-        \\  pdfzig visual_diff -d 300 doc1.pdf doc2.pdf
+        \\  pdfzig visual_diff -r 300 doc1.pdf doc2.pdf
         \\  pdfzig visual_diff -o ./diffs doc1.pdf doc2.pdf
         \\  pdfzig visual_diff -P secret1 -P secret2 enc1.pdf enc2.pdf
         \\
