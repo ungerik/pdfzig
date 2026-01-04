@@ -6,6 +6,9 @@ const builtin = @import("builtin");
 const loader = @import("pdfium_loader.zig");
 const Allocator = std.mem.Allocator;
 
+/// Progress callback function type
+pub const ProgressCallback = *const fn (downloaded: u64, total: ?u64) void;
+
 pub const DownloadError = error{
     UnsupportedPlatform,
     DownloadFailed,
@@ -58,6 +61,11 @@ fn getSourceLibName() []const u8 {
 /// Returns the Chromium build version number
 /// If version is null, downloads the latest release
 pub fn downloadPdfium(allocator: Allocator, version: ?u32, output_dir: []const u8) !u32 {
+    return downloadPdfiumWithProgress(allocator, version, output_dir, null);
+}
+
+/// Download PDFium with progress callback
+pub fn downloadPdfiumWithProgress(allocator: Allocator, version: ?u32, output_dir: []const u8, progress_cb: ?ProgressCallback) !u32 {
     const asset_name = getPdfiumAssetName() orelse return DownloadError.UnsupportedPlatform;
 
     // Build the download URL
@@ -69,34 +77,71 @@ pub fn downloadPdfium(allocator: Allocator, version: ?u32, output_dir: []const u
 
     std.debug.print("Downloading PDFium from: {s}\n", .{url});
 
-    const actual_version = try downloadAndExtract(allocator, url, version, output_dir);
+    const actual_version = try downloadAndExtract(allocator, url, version, output_dir, progress_cb);
 
     return actual_version;
 }
 
 /// Perform an HTTP GET request and return the response body
 fn httpGet(allocator: Allocator, url: []const u8, extra_headers: []const std.http.Header) ![]u8 {
+    return httpGetWithProgress(allocator, url, extra_headers, null);
+}
+
+/// Perform an HTTP GET request with progress reporting
+fn httpGetWithProgress(allocator: Allocator, url: []const u8, extra_headers: []const std.http.Header, progress_cb: ?ProgressCallback) ![]u8 {
     var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
 
-    // Create an allocating writer to collect the response body
-    var response_writer: std.Io.Writer.Allocating = .init(allocator);
-    errdefer response_writer.deinit();
+    const uri = std.Uri.parse(url) catch return DownloadError.HttpError;
 
-    const result = client.fetch(.{
-        .location = .{ .url = url },
+    var req = client.request(.GET, uri, .{
         .extra_headers = extra_headers,
-        .response_writer = &response_writer.writer,
     }) catch return DownloadError.HttpError;
+    defer req.deinit();
 
-    if (result.status != .ok) {
-        response_writer.deinit();
+    req.sendBodiless() catch return DownloadError.HttpError;
+
+    var header_buffer: [8192]u8 = undefined;
+    var response = req.receiveHead(&header_buffer) catch return DownloadError.HttpError;
+
+    if (response.head.status != .ok) {
         return DownloadError.HttpError;
     }
 
-    // Get the collected data as an owned slice
-    var list = response_writer.toArrayList();
-    return list.toOwnedSlice(allocator);
+    const content_length = response.head.content_length;
+
+    // Read response body in chunks with progress reporting
+    var body_data = std.array_list.Managed(u8).init(allocator);
+    errdefer body_data.deinit();
+
+    // Pre-allocate if we know the size
+    if (content_length) |len| {
+        body_data.ensureTotalCapacity(@intCast(len)) catch {};
+    }
+
+    var transfer_buffer: [16384]u8 = undefined;
+    const reader = response.reader(&transfer_buffer);
+    var downloaded: u64 = 0;
+    var read_buf: [16384]u8 = undefined;
+
+    // Determine how many bytes to read
+    const total_to_read = content_length orelse std.math.maxInt(u64);
+
+    while (downloaded < total_to_read) {
+        const remaining = total_to_read - downloaded;
+        const read_len = @min(read_buf.len, remaining);
+        const bytes_read = reader.readSliceShort(read_buf[0..@intCast(read_len)]) catch return DownloadError.HttpError;
+        if (bytes_read == 0) break;
+
+        body_data.appendSlice(read_buf[0..bytes_read]) catch return DownloadError.OutOfMemory;
+        downloaded += bytes_read;
+
+        if (progress_cb) |cb| {
+            cb(downloaded, content_length);
+        }
+    }
+
+    return body_data.toOwnedSlice() catch return DownloadError.OutOfMemory;
 }
 
 /// Fetch the expected SHA256 hash from GitHub API for a release asset
@@ -166,7 +211,7 @@ fn hashToHex(hash: [32]u8) [64]u8 {
 }
 
 /// Download and extract PDFium using native Zig HTTP and tar
-fn downloadAndExtract(allocator: Allocator, url: []const u8, version: ?u32, output_dir: []const u8) !u32 {
+fn downloadAndExtract(allocator: Allocator, url: []const u8, version: ?u32, output_dir: []const u8, progress_cb: ?ProgressCallback) !u32 {
     const asset_name = getPdfiumAssetName() orelse return DownloadError.UnsupportedPlatform;
 
     // Try to fetch the expected hash from GitHub API
@@ -175,8 +220,8 @@ fn downloadAndExtract(allocator: Allocator, url: []const u8, version: ?u32, outp
         std.debug.print("Retrieved SHA256 hash from GitHub\n", .{});
     }
 
-    // Download the archive
-    const archive_data = try httpGet(allocator, url, &.{});
+    // Download the archive with progress
+    const archive_data = try httpGetWithProgress(allocator, url, &.{}, progress_cb);
     defer allocator.free(archive_data);
 
     if (archive_data.len < 1000) {
