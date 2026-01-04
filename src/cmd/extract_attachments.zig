@@ -100,7 +100,7 @@ pub fn run(
 
         // Apply pattern filter if specified
         if (args.pattern) |pattern| {
-            if (!main.matchGlobPattern(pattern, std.fs.path.basename(name))) {
+            if (!main.matchGlobPatternCaseInsensitive(pattern, std.fs.path.basename(name))) {
                 continue;
             }
         }

@@ -126,7 +126,7 @@ pub fn run(
         while (it.next()) |att| {
             if (att.getName(allocator)) |name| {
                 defer allocator.free(name);
-                if (main.matchGlobPattern(pattern, name)) {
+                if (main.matchGlobPatternCaseInsensitive(pattern, name)) {
                     // Add if not already in list
                     var found = false;
                     for (indices_to_delete.items) |existing| {

@@ -70,7 +70,7 @@ pub fn run(
         var it = glob_results.iterate();
         while (it.next() catch null) |entry| {
             if (entry.kind != .file) continue;
-            if (main.matchGlobPattern(pattern, entry.name)) {
+            if (main.matchGlobPatternCaseInsensitive(pattern, entry.name)) {
                 const path_copy = allocator.dupe(u8, entry.name) catch {
                     try stderr.writeAll("Error: Out of memory\n");
                     try stderr.flush();

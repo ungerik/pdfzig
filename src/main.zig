@@ -294,7 +294,7 @@ pub fn parsePageList(
 }
 
 /// Simple glob pattern matching supporting * and ? wildcards (case-insensitive)
-pub fn matchGlobPattern(pattern: []const u8, name: []const u8) bool {
+pub fn matchGlobPatternCaseInsensitive(pattern: []const u8, name: []const u8) bool {
     // Convert both to lowercase for case-insensitive matching
     var pattern_lower: [256]u8 = undefined;
     var name_lower: [256]u8 = undefined;
