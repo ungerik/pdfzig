@@ -209,13 +209,6 @@ pub fn getLibraryExtension() []const u8 {
     };
 }
 
-/// Get the library file prefix for the current platform
-pub fn getLibraryPrefix() []const u8 {
-    return switch (builtin.os.tag) {
-        .windows => "",
-        else => "lib",
-    };
-}
 
 /// Extract version number from a library path
 /// E.g., "pdfium_v7606.dylib" -> 7606, "libpdfium_v7606.so" -> 7606
@@ -256,27 +249,16 @@ pub fn findBestPdfiumLibrary(allocator: Allocator, search_dir: []const u8) !?Lib
     var best_path: ?[]u8 = null;
 
     const ext = getLibraryExtension();
-    const prefix = getLibraryPrefix();
 
     var it = dir.iterate();
     while (try it.next()) |entry| {
         if (entry.kind != .file) continue;
 
-        // Check if filename matches pattern: [lib]pdfium_v{VERSION}.{ext}
+        // Check if filename matches pattern: pdfium_v{VERSION}.{ext}
         const name = entry.name;
 
-        // Check prefix
-        var name_after_prefix = name;
-        if (prefix.len > 0) {
-            if (std.mem.startsWith(u8, name, prefix)) {
-                name_after_prefix = name[prefix.len..];
-            } else {
-                continue;
-            }
-        }
-
         // Check if it starts with "pdfium_v"
-        if (!std.mem.startsWith(u8, name_after_prefix, "pdfium_v")) continue;
+        if (!std.mem.startsWith(u8, name, "pdfium_v")) continue;
 
         // Check if it ends with the correct extension
         if (!std.mem.endsWith(u8, name, ext)) continue;
@@ -315,10 +297,10 @@ pub fn getExecutableDir(allocator: Allocator) ![]u8 {
 }
 
 /// Build the expected library filename for a given version
+/// Uses the format: pdfium_v{BUILD}.{ext}
 pub fn buildLibraryFilename(allocator: Allocator, version: u32) ![]u8 {
-    const prefix = getLibraryPrefix();
     const ext = getLibraryExtension();
-    return std.fmt.allocPrint(allocator, "{s}pdfium_v{d}{s}", .{ prefix, version, ext });
+    return std.fmt.allocPrint(allocator, "pdfium_v{d}{s}", .{ version, ext });
 }
 
 // ============================================================================
@@ -327,11 +309,11 @@ pub fn buildLibraryFilename(allocator: Allocator, version: u32) ![]u8 {
 
 test "extractVersionFromPath" {
     try std.testing.expectEqual(@as(?u32, 7606), extractVersionFromPath("pdfium_v7606.dylib"));
-    try std.testing.expectEqual(@as(?u32, 7606), extractVersionFromPath("libpdfium_v7606.so"));
-    try std.testing.expectEqual(@as(?u32, 7606), extractVersionFromPath("libpdfium_v7606.dylib"));
-    try std.testing.expectEqual(@as(?u32, 7606), extractVersionFromPath("/path/to/libpdfium_v7606.dylib"));
+    try std.testing.expectEqual(@as(?u32, 7606), extractVersionFromPath("pdfium_v7606.so"));
+    try std.testing.expectEqual(@as(?u32, 7606), extractVersionFromPath("pdfium_v7606.dll"));
+    try std.testing.expectEqual(@as(?u32, 7606), extractVersionFromPath("/path/to/pdfium_v7606.dylib"));
     try std.testing.expectEqual(@as(?u32, 123), extractVersionFromPath("pdfium_v123.dll"));
-    try std.testing.expectEqual(@as(?u32, null), extractVersionFromPath("libpdfium.dylib"));
+    try std.testing.expectEqual(@as(?u32, null), extractVersionFromPath("pdfium.dylib"));
     try std.testing.expectEqual(@as(?u32, null), extractVersionFromPath("pdfium.dll"));
     try std.testing.expectEqual(@as(?u32, null), extractVersionFromPath("something_else.dylib"));
 }

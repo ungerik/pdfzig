@@ -12,8 +12,19 @@ pdfzig is a Zig CLI tool that uses PDFium to work with PDF files. It supports re
 zig build              # Build the executable
 zig build run -- <args>  # Build and run with arguments
 zig build test         # Run unit tests
-./clean.sh             # Remove all build artifacts and caches
+zig build clean        # Remove build artifacts and caches (zig-out/, .zig-cache/, test-cache/)
+zig build fmt          # Check source code formatting
+zig build fmt-fix      # Fix source code formatting
+zig build all          # Build for all supported platforms (cross-compile)
+zig build all -Ddownload-pdfium # Build for all platforms and download matching PDFium libs
 ```
+
+Cross-compilation targets for `zig build all`:
+- macOS: x86_64, aarch64
+- Linux: x86_64, aarch64, arm (gnueabihf)
+- Windows: x86_64, x86, aarch64
+
+Outputs are placed in `zig-out/<target-triple>/` (e.g., `zig-out/x86_64-linux-gnu/pdfzig`).
 
 Run the built executable directly:
 ```bash

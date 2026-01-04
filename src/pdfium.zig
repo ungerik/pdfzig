@@ -154,6 +154,11 @@ pub fn getVersion() ?u32 {
     return null;
 }
 
+/// Get the path to the loaded library
+pub fn getLibraryPath() ?[]const u8 {
+    return lib_path;
+}
+
 /// Get the last error code from PDFium
 fn getLastError() Error {
     const l = lib orelse return Error.LibraryNotLoaded;

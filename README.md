@@ -349,7 +349,42 @@ zig build test
 
 # Run directly
 zig build run -- info document.pdf
+
+# Check source code formatting
+zig build fmt
+
+# Fix source code formatting
+zig build fmt-fix
+
+# Remove build artifacts and caches (zig-out/, .zig-cache/, test-cache/)
+zig build clean
+
+# Build for all supported platforms (outputs to zig-out/<target-triple>/)
+zig build all
 ```
+
+### Cross-Compilation Targets
+
+The `zig build all` command builds for all supported platforms:
+
+| Platform | Architecture | Output Directory |
+|----------|--------------|------------------|
+| macOS    | x86_64       | `zig-out/x86_64-macos-none/` |
+| macOS    | arm64        | `zig-out/aarch64-macos-none/` |
+| Linux    | x86_64       | `zig-out/x86_64-linux-gnu/` |
+| Linux    | arm64        | `zig-out/aarch64-linux-gnu/` |
+| Linux    | arm          | `zig-out/arm-linux-gnueabihf/` |
+| Windows  | x86_64       | `zig-out/x86_64-windows-gnu/` |
+| Windows  | x86          | `zig-out/x86-windows-gnu/` |
+| Windows  | arm64        | `zig-out/aarch64-windows-gnu/` |
+
+To also download the PDFium library for each target platform during the build:
+
+```bash
+zig build all -Ddownload-pdfium=true
+```
+
+This places the appropriate PDFium library (`.dylib`, `.so`, or `.dll`) alongside each executable.
 
 ## License
 

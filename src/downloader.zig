@@ -22,9 +22,11 @@ pub const DownloadError = error{
 
 /// Get the PDFium asset name for the current platform
 pub fn getPdfiumAssetName() ?[]const u8 {
-    const arch = builtin.cpu.arch;
-    const os = builtin.os.tag;
+    return getPdfiumAssetNameForTarget(builtin.cpu.arch, builtin.os.tag);
+}
 
+/// Get the PDFium asset name for a specific target platform
+pub fn getPdfiumAssetNameForTarget(arch: std.Target.Cpu.Arch, os: std.Target.Os.Tag) ?[]const u8 {
     return switch (os) {
         .macos => switch (arch) {
             .aarch64 => "pdfium-mac-arm64.tgz",
@@ -49,12 +51,184 @@ pub fn getPdfiumAssetName() ?[]const u8 {
 
 /// Get the source library name inside the archive
 fn getSourceLibName() []const u8 {
-    return switch (builtin.os.tag) {
+    return getSourceLibNameForTarget(builtin.os.tag);
+}
+
+/// Get the source library name for a specific target OS
+pub fn getSourceLibNameForTarget(os: std.Target.Os.Tag) []const u8 {
+    return switch (os) {
         .macos => "libpdfium.dylib",
         .linux => "libpdfium.so",
         .windows => "pdfium.dll",
         else => "libpdfium.so",
     };
+}
+
+/// Get the source library directory inside the archive for a specific target OS
+/// Windows uses bin/ while others use lib/
+fn getSourceLibDirForTarget(os: std.Target.Os.Tag) []const u8 {
+    return switch (os) {
+        .windows => "bin",
+        else => "lib",
+    };
+}
+
+/// Get the library file extension for a specific target OS
+pub fn getLibraryExtensionForTarget(os: std.Target.Os.Tag) []const u8 {
+    return switch (os) {
+        .macos => ".dylib",
+        .linux => ".so",
+        .windows => ".dll",
+        else => ".so",
+    };
+}
+
+/// Build the library filename for a specific target
+/// Always uses the format: pdfium_v{BUILD}.{ext}
+pub fn buildLibraryFilenameForTarget(allocator: Allocator, version: u32, os: std.Target.Os.Tag) ![]u8 {
+    const ext = getLibraryExtensionForTarget(os);
+    return std.fmt.allocPrint(allocator, "pdfium_v{d}{s}", .{ version, ext });
+}
+
+/// Download PDFium for a specific target platform
+pub fn downloadPdfiumForTarget(
+    allocator: Allocator,
+    arch: std.Target.Cpu.Arch,
+    os: std.Target.Os.Tag,
+    output_dir: []const u8,
+) !u32 {
+    const asset_name = getPdfiumAssetNameForTarget(arch, os) orelse return DownloadError.UnsupportedPlatform;
+
+    // Always download latest
+    const url = try std.fmt.allocPrint(allocator, "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/{s}", .{asset_name});
+    defer allocator.free(url);
+
+    std.debug.print("Downloading PDFium for {s}-{s} from: {s}\n", .{ @tagName(arch), @tagName(os), url });
+
+    return downloadAndExtractForTarget(allocator, url, null, output_dir, arch, os, null);
+}
+
+/// Download and extract PDFium for a specific target
+fn downloadAndExtractForTarget(
+    allocator: Allocator,
+    url: []const u8,
+    version: ?u32,
+    output_dir: []const u8,
+    arch: std.Target.Cpu.Arch,
+    os: std.Target.Os.Tag,
+    progress_cb: ?ProgressCallback,
+) !u32 {
+    const asset_name = getPdfiumAssetNameForTarget(arch, os) orelse return DownloadError.UnsupportedPlatform;
+
+    // Try to fetch the expected hash from GitHub API
+    const expected_hash = fetchExpectedHash(allocator, asset_name, version);
+    if (expected_hash) |_| {
+        std.debug.print("Retrieved SHA256 hash from GitHub\n", .{});
+    }
+
+    // Download the archive with progress
+    const archive_data = try httpGetWithProgress(allocator, url, &.{}, progress_cb);
+    defer allocator.free(archive_data);
+
+    if (archive_data.len < 1000) {
+        std.debug.print("Downloaded file too small ({d} bytes), download likely failed\n", .{archive_data.len});
+        return DownloadError.DownloadFailed;
+    }
+
+    std.debug.print("Downloaded {d} bytes\n", .{archive_data.len});
+
+    // Verify hash if we have an expected hash
+    if (expected_hash) |exp_hash| {
+        const actual_hash = calculateHash(archive_data);
+        const actual_hex = hashToHex(actual_hash);
+
+        if (!std.mem.eql(u8, &actual_hex, &exp_hash)) {
+            std.debug.print("Hash mismatch!\n", .{});
+            std.debug.print("Expected: {s}\n", .{exp_hash});
+            std.debug.print("Actual:   {s}\n", .{actual_hex});
+            return DownloadError.HashMismatch;
+        }
+        std.debug.print("SHA256 hash verified\n", .{});
+    }
+
+    // Create a temporary directory for extraction
+    const tmp_dir = try std.fs.path.join(allocator, &.{ output_dir, ".pdfium_tmp" });
+    defer allocator.free(tmp_dir);
+
+    // Clean up any existing temp directory
+    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    // Create temp directory
+    try std.fs.makeDirAbsolute(tmp_dir);
+    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    // Decompress gzip and extract tar
+    var input_reader: std.Io.Reader = .fixed(archive_data);
+    var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompress = std.compress.flate.Decompress.init(&input_reader, .gzip, &decompress_buffer);
+
+    var tmp_dir_handle = try std.fs.openDirAbsolute(tmp_dir, .{});
+    defer tmp_dir_handle.close();
+
+    std.tar.pipeToFileSystem(tmp_dir_handle, &decompress.reader, .{
+        .strip_components = 0,
+    }) catch |err| {
+        std.debug.print("Tar extraction failed: {}\n", .{err});
+        return DownloadError.ExtractionFailed;
+    };
+
+    // Get the version from VERSION file if not specified
+    const actual_version = version orelse blk: {
+        const version_file_path = try std.fs.path.join(allocator, &.{ tmp_dir, "VERSION" });
+        defer allocator.free(version_file_path);
+
+        const version_file = std.fs.openFileAbsolute(version_file_path, .{}) catch {
+            std.debug.print("Warning: Could not open VERSION file at {s}\n", .{version_file_path});
+            break :blk @as(u32, 0);
+        };
+        defer version_file.close();
+
+        var version_buf: [256]u8 = undefined;
+        const bytes_read = version_file.readAll(&version_buf) catch {
+            std.debug.print("Warning: Could not read VERSION file\n", .{});
+            break :blk @as(u32, 0);
+        };
+
+        const content = version_buf[0..bytes_read];
+        var line_it = std.mem.splitScalar(u8, content, '\n');
+        while (line_it.next()) |line| {
+            if (std.mem.startsWith(u8, line, "BUILD=")) {
+                const build_str = std.mem.trim(u8, line["BUILD=".len..], &std.ascii.whitespace);
+                break :blk std.fmt.parseInt(u32, build_str, 10) catch 0;
+            }
+        }
+        break :blk @as(u32, 0);
+    };
+
+    std.debug.print("PDFium version: {d}\n", .{actual_version});
+
+    // Find the library in the appropriate subdirectory (lib/ for macOS/Linux, bin/ for Windows)
+    const src_lib_name = getSourceLibNameForTarget(os);
+    const src_lib_dir = getSourceLibDirForTarget(os);
+    const lib_src_path = try std.fs.path.join(allocator, &.{ tmp_dir, src_lib_dir, src_lib_name });
+    defer allocator.free(lib_src_path);
+
+    // Build destination filename with version
+    const dest_filename = try buildLibraryFilenameForTarget(allocator, actual_version, os);
+    defer allocator.free(dest_filename);
+
+    const dest_path = try std.fs.path.join(allocator, &.{ output_dir, dest_filename });
+    defer allocator.free(dest_path);
+
+    // Copy the library file
+    std.fs.copyFileAbsolute(lib_src_path, dest_path, .{}) catch |err| {
+        std.debug.print("Failed to copy library from {s} to {s}: {}\n", .{ lib_src_path, dest_path, err });
+        return DownloadError.ExtractionFailed;
+    };
+
+    std.debug.print("Installed: {s}\n", .{dest_filename});
+
+    return actual_version;
 }
 
 /// Download PDFium to the specified output directory
