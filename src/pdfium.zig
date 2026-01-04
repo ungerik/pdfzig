@@ -178,6 +178,16 @@ fn getLastError() Error {
 pub const Document = struct {
     handle: loader.FPDF_DOCUMENT,
 
+    /// Create a new empty PDF document
+    pub fn createNew() Error!Document {
+        const l = lib orelse return Error.LibraryNotLoaded;
+        const handle = l.FPDF_CreateNewDocument();
+        if (handle == null) {
+            return Error.Unknown;
+        }
+        return .{ .handle = handle };
+    }
+
     /// Open a PDF document from a file path
     pub fn open(path: []const u8) Error!Document {
         const l = lib orelse return Error.LibraryNotLoaded;
@@ -223,6 +233,56 @@ pub const Document = struct {
                 l.FPDF_CloseDocument(self.handle);
             }
             self.handle = null;
+        }
+    }
+
+    /// Import pages from another document
+    /// page_indices: array of 0-based page indices to import, or null to import all pages
+    /// insert_index: 0-based index where to insert pages in this document
+    pub fn importPages(self: *Document, src_doc: *Document, page_indices: ?[]const c_int, insert_index: u32) bool {
+        const l = lib orelse return false;
+        if (page_indices) |indices| {
+            return l.FPDF_ImportPagesByIndex(
+                self.handle,
+                src_doc.handle,
+                indices.ptr,
+                @intCast(indices.len),
+                @intCast(insert_index),
+            ) != 0;
+        } else {
+            // Import all pages
+            return l.FPDF_ImportPages(
+                self.handle,
+                src_doc.handle,
+                null,
+                @intCast(insert_index),
+            ) != 0;
+        }
+    }
+
+    /// Import a range of pages from another document using a page range string
+    /// page_range: e.g., "1-3,5,7-9" (1-based), or null for all pages
+    /// insert_index: 0-based index where to insert pages in this document
+    pub fn importPagesRange(self: *Document, src_doc: *Document, page_range: ?[]const u8, insert_index: u32) bool {
+        const l = lib orelse return false;
+        if (page_range) |range| {
+            var range_buf: [256]u8 = undefined;
+            if (range.len >= range_buf.len) return false;
+            @memcpy(range_buf[0..range.len], range);
+            range_buf[range.len] = 0;
+            return l.FPDF_ImportPages(
+                self.handle,
+                src_doc.handle,
+                &range_buf,
+                @intCast(insert_index),
+            ) != 0;
+        } else {
+            return l.FPDF_ImportPages(
+                self.handle,
+                src_doc.handle,
+                null,
+                @intCast(insert_index),
+            ) != 0;
         }
     }
 

@@ -15,12 +15,16 @@ pub const Command = enum {
     mirror,
     delete,
     add,
+    create,
     attach,
     detach,
     download_pdfium,
     help,
     version_cmd,
 };
+
+/// Special constant for blank page in create command
+pub const BLANK_PAGE: []const u8 = ":blank";
 
 /// Simple slice-based argument iterator
 pub const SliceArgIterator = struct {

@@ -163,6 +163,11 @@ pub const PdfiumLib = struct {
     FPDFText_SetText: *const fn (text_object: FPDF_PAGEOBJECT, text: FPDF_WIDESTRING) callconv(.c) FPDF_BOOL,
     FPDFPageObj_Transform: *const fn (page_object: FPDF_PAGEOBJECT, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) callconv(.c) void,
 
+    // Document creation and page import functions
+    FPDF_CreateNewDocument: *const fn () callconv(.c) FPDF_DOCUMENT,
+    FPDF_ImportPages: *const fn (dest_doc: FPDF_DOCUMENT, src_doc: FPDF_DOCUMENT, pagerange: FPDF_BYTESTRING, index: c_int) callconv(.c) FPDF_BOOL,
+    FPDF_ImportPagesByIndex: *const fn (dest_doc: FPDF_DOCUMENT, src_doc: FPDF_DOCUMENT, page_indices: [*c]const c_int, length: c_ulong, index: c_int) callconv(.c) FPDF_BOOL,
+
     /// Load PDFium library from a specific path
     pub fn load(path: []const u8) LoadError!PdfiumLib {
         var self: PdfiumLib = undefined;

@@ -107,7 +107,14 @@ Run the built executable directly:
 - Uses `std.Io.Writer` and `std.Io.Reader` (new Zig 0.15 I/O interfaces)
 - Uses `std.array_list.Managed(T).init(allocator)` (not `std.ArrayList(T).init(allocator)` which was deprecated in Zig 0.15)
 
-## Change Rules
+## Zig Code Rules
+
+- **ALWAYS** use `std.array_list.Managed(T).init(allocator)` instead of deprecated `std.ArrayList(T).init(allocator)`
+
+## Markdown Rules
+
+- Always pad markdown tables in README.md to align vertical lines
+
+## Documentation Rules
 
 - When a command is changed or added, update README.md and CLAUDE.md
-- Always pad markdown tables in README.md to align vertical lines

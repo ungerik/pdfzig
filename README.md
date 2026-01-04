@@ -14,6 +14,7 @@ A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
 - **Mirror** pages horizontally or vertically
 - **Delete** pages from PDFs
 - **Add** new pages with optional image or text content
+- **Create** new PDFs from multiple sources (PDFs, images, text files)
 - **Attach** files as PDF attachments
 - **Detach** (remove) attachments from PDFs
 - Support for **password-protected** PDFs
@@ -259,6 +260,36 @@ Supported page sizes: A0-A8, B0-B6, C4-C6, Letter, Legal, Tabloid, Ledger, Execu
 
 Supported units: `mm`, `cm`, `in`/`inch`, `pt` (points, default)
 
+### Create PDF
+
+Create a new PDF from multiple sources (PDFs, images, text files):
+
+```bash
+# Merge two PDFs
+pdfzig create -o combined.pdf doc1.pdf doc2.pdf
+
+# Import only specific pages from a PDF
+pdfzig create -o excerpt.pdf -p 1-5,10 document.pdf
+
+# Create from mixed sources: image cover + PDF content
+pdfzig create -o book.pdf cover.png content.pdf
+
+# Insert blank pages using :blank
+pdfzig create -o padded.pdf :blank document.pdf :blank
+
+# Combine everything: blank + image + PDF pages + text
+pdfzig create -o report.pdf :blank logo.png -p 1-3 intro.pdf notes.txt
+
+# Specify page size for images and text (default: A4)
+pdfzig create -s Letter -o output.pdf image.png notes.txt
+```
+
+Source types:
+- **PDF files**: Import pages (all pages or use `-p` for specific pages)
+- **Images**: PNG, JPEG, BMP - creates a page with the image scaled to fit
+- **Text files**: Creates a page with the text content
+- **`:blank`**: Inserts a blank page
+
 ### Attach Files
 
 ```bash
@@ -322,7 +353,7 @@ Page selection syntax:
 - Page range: `-p 1-10`
 - Combined: `-p 1-5,8,10-12`
 
-Commands supporting `-p`: `render`, `extract_text`, `extract_images`, `rotate`, `mirror`
+Commands supporting `-p`: `render`, `extract_text`, `extract_images`, `rotate`, `mirror`, `create`
 
 ## Supported Platforms
 
