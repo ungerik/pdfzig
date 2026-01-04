@@ -1,0 +1,25 @@
+.{
+    .fingerprint = 0xf6901ca342b074b0,
+    .name = .pdfzig,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.1",
+
+    .dependencies = .{
+        .zigimg = .{
+            .url = "https://github.com/zigimg/zigimg/archive/refs/tags/zigimg_zig_0.15.1.tar.gz",
+            .hash = "zigimg-0.1.0-8_eo2jNrFQD4mu3EAUkfQRmCkyfprdIXc8JQ6uyxhjSQ",
+        },
+        .zstbi = .{
+            .url = "git+https://github.com/zig-gamedev/zstbi#664305dd52640be15cbebd7cd73d1199679933e1",
+            .hash = "zstbi-0.11.0-dev-L0Ea_2yVBwA4uh-tHfgdhZcQaWRoZVYlNGs4Dl_WTeuR",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+    },
+}
