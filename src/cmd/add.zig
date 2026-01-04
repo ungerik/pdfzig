@@ -147,7 +147,7 @@ pub fn run(
 
         if (is_json) {
             // Handle JSON file with formatted text blocks
-            try textfmt.addJsonToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
+            try textfmt.addJsonToPage(allocator, &doc, &new_page, content_path, stderr);
         } else if (is_text) {
             // Handle text file
             try textfmt.addTextToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);

@@ -164,7 +164,7 @@ pub fn run(
                 };
                 defer page.close();
 
-                try textfmt.addJsonToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
+                try textfmt.addJsonToPage(allocator, &doc, &page, source.path, stderr);
 
                 if (!page.generateContent()) {
                     try stderr.writeAll("Error generating page content\n");

@@ -347,11 +347,11 @@ pub fn run(
     }
 }
 
-fn writeGrayscalePng(data: []const u8, width: u32, height: u32, path: []const u8) !void {
+fn writeGrayscalePng(data: []u8, width: u32, height: u32, path: []const u8) !void {
     // Create grayscale pixel data slice with correct type
     const pixel_data: []zigimg.color.Grayscale8 = @as(
         [*]zigimg.color.Grayscale8,
-        @ptrCast(@constCast(data.ptr)),
+        @ptrCast(data.ptr),
     )[0 .. @as(usize, width) * @as(usize, height)];
 
     // Create image with grayscale pixels
@@ -368,11 +368,11 @@ fn writeGrayscalePng(data: []const u8, width: u32, height: u32, path: []const u8
     }) catch return error.WriteError;
 }
 
-fn writeRgbPng(data: []const u8, width: u32, height: u32, path: []const u8) !void {
+fn writeRgbPng(data: []u8, width: u32, height: u32, path: []const u8) !void {
     // Create RGB pixel data slice with correct type
     const pixel_data: []zigimg.color.Rgb24 = @as(
         [*]zigimg.color.Rgb24,
-        @ptrCast(@constCast(data.ptr)),
+        @ptrCast(data.ptr),
     )[0 .. @as(usize, width) * @as(usize, height)];
 
     // Create image with RGB pixels

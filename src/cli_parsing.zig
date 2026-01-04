@@ -652,67 +652,49 @@ test "parsePageRanges errors" {
     try std.testing.expectError(error.InvalidPageRange, parsePageRanges(allocator, "abc", 20));
 }
 
+/// Expand a list of PageRanges into a flat list of page numbers.
+pub fn expandPageRanges(allocator: std.mem.Allocator, ranges: []const PageRange) std.mem.Allocator.Error![]u32 {
+    var pages = std.array_list.Managed(u32).init(allocator);
+    errdefer pages.deinit();
+
+    for (ranges) |range| {
+        var p = range.start;
+        while (p <= range.end) : (p += 1) {
+            try pages.append(p);
+        }
+    }
+
+    return try pages.toOwnedSlice();
+}
+
 /// Parse a page range string (e.g., "1-5,8,10-12") into a list of page numbers.
 /// If range_str is null, returns all pages from 1 to page_count.
-/// Returns error message on stderr and exits on invalid input.
+/// Prints error message on stderr and exits on invalid input.
 pub fn parsePageList(
     allocator: std.mem.Allocator,
     range_str: ?[]const u8,
     page_count: u32,
     stderr: *std.Io.Writer,
 ) std.mem.Allocator.Error![]u32 {
-    var pages = std.array_list.Managed(u32).init(allocator);
-    errdefer pages.deinit();
-
     if (range_str) |range| {
-        var range_it = std.mem.splitScalar(u8, range, ',');
-        while (range_it.next()) |part| {
-            const trimmed = std.mem.trim(u8, part, " ");
-            if (trimmed.len == 0) continue;
+        const ranges = parsePageRanges(allocator, range, page_count) catch {
+            stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ range, page_count }) catch {};
+            stderr.flush() catch {};
+            std.process.exit(1);
+        };
+        defer allocator.free(ranges);
 
-            if (std.mem.indexOf(u8, trimmed, "-")) |dash_pos| {
-                const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
-                const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
-                const start = std.fmt.parseInt(u32, start_str, 10) catch {
-                    stderr.print("Invalid page range: {s}\n", .{part}) catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
-                };
-                const end = std.fmt.parseInt(u32, end_str, 10) catch {
-                    stderr.print("Invalid page range: {s}\n", .{part}) catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
-                };
-                if (start < 1 or end > page_count or start > end) {
-                    stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ part, page_count }) catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
-                }
-                var p = start;
-                while (p <= end) : (p += 1) {
-                    try pages.append(p);
-                }
-            } else {
-                const page_num = std.fmt.parseInt(u32, trimmed, 10) catch {
-                    stderr.print("Invalid page number: {s}\n", .{trimmed}) catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
-                };
-                if (page_num < 1 or page_num > page_count) {
-                    stderr.print("Invalid page number: {d} (document has {d} pages)\n", .{ page_num, page_count }) catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
-                }
-                try pages.append(page_num);
-            }
-        }
+        return expandPageRanges(allocator, ranges);
     } else {
         // All pages
+        var pages = std.array_list.Managed(u32).init(allocator);
+        errdefer pages.deinit();
+
         var p: u32 = 1;
         while (p <= page_count) : (p += 1) {
             try pages.append(p);
         }
-    }
 
-    return pages.toOwnedSlice() catch unreachable;
+        return try pages.toOwnedSlice();
+    }
 }

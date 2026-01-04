@@ -372,13 +372,8 @@ pub fn addJsonToPage(
     doc: *pdfium.Document,
     page: *pdfium.Page,
     json_path: []const u8,
-    page_width: f64,
-    page_height: f64,
     stderr: *std.Io.Writer,
 ) !void {
-    _ = page_width;
-    _ = page_height;
-
     // Read JSON file
     const file = std.fs.cwd().openFile(json_path, .{}) catch {
         try stderr.print("Error opening JSON file: {s}\n", .{json_path});
@@ -531,6 +526,7 @@ fn renderBlock(
         }
         try utf16_buf.append(0);
         if (!text_obj.setText(utf16_buf.items)) return;
+        // Color failure is non-fatal - object uses default black color
         _ = text_obj.setFillColor(r, g, b, a);
         text_obj.transform(1, 0, 0, 1, x, y);
         page.insertObject(text_obj);
@@ -552,7 +548,7 @@ fn renderBlock(
 
     if (!text_obj.setText(utf16_buf.items)) return;
 
-    // Set color
+    // Set color (failure is non-fatal - object uses default black color)
     _ = text_obj.setFillColor(r, g, b, a);
 
     // Position the text

@@ -146,8 +146,8 @@ pub fn run(
 
     // Check if trying to delete all pages
     if (pages_to_delete.len >= page_count) {
-        try stderr.flush();
         try stderr.writeAll("Error: Cannot delete all pages. Omit page range to replace all pages with an empty page.\n");
+        try stderr.flush();
         std.process.exit(1);
     }
 
