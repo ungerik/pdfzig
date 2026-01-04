@@ -2,8 +2,8 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const renderer = @import("../renderer.zig");
-const json_text = @import("../text/formatting.zig");
+const cli_parsing = @import("../cli_parsing.zig");
+const textfmt = @import("../pdfcontent/textfmt.zig");
 const main = @import("../main.zig");
 
 pub const TextOutputFormat = enum {
@@ -81,11 +81,11 @@ pub fn run(
     const page_count = doc.getPageCount();
 
     // Parse page ranges
-    var page_ranges: ?[]renderer.PageRange = null;
+    var page_ranges: ?[]cli_parsing.PageRange = null;
     defer if (page_ranges) |ranges| allocator.free(ranges);
 
     if (args.page_range) |range_str| {
-        page_ranges = renderer.parsePageRanges(allocator, range_str, page_count) catch {
+        page_ranges = cli_parsing.parsePageRanges(allocator, range_str, page_count) catch {
             try stderr.print("Error: Invalid page range '{s}'\n", .{range_str});
             try stderr.flush();
             std.process.exit(1);
@@ -118,7 +118,7 @@ pub fn run(
                 const page_num: u32 = @intCast(i);
 
                 if (page_ranges) |ranges| {
-                    if (!renderer.isPageInRanges(page_num, ranges)) continue;
+                    if (!cli_parsing.isPageInRanges(page_num, ranges)) continue;
                 }
 
                 var page = doc.loadPage(page_num - 1) catch continue;
@@ -139,7 +139,7 @@ pub fn run(
             }
         },
         .json => {
-            try json_text.extractTextAsJson(allocator, &doc, page_count, page_ranges, output);
+            try textfmt.extractTextAsJson(allocator, &doc, page_count, page_ranges, output);
         },
     }
 

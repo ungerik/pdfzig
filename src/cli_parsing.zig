@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const glob = @import("glob");
-const image_writer = @import("image_writer.zig");
+const images = @import("pdfcontent/images.zig");
 
 /// Available commands
 pub const Command = enum {
@@ -56,7 +56,7 @@ pub const SliceArgIterator = struct {
 
 pub const OutputSpec = struct {
     dpi: f64,
-    format: image_writer.Format,
+    format: images.Format,
     quality: u8,
     template: []const u8,
 };
@@ -70,7 +70,7 @@ pub fn parseOutputSpec(spec_str: []const u8) !OutputSpec {
     const template = it.next() orelse return error.InvalidSpec;
 
     const dpi = std.fmt.parseFloat(f64, dpi_str) catch return error.InvalidSpec;
-    const format = image_writer.Format.fromString(format_str) orelse return error.InvalidSpec;
+    const format = images.Format.fromString(format_str) orelse return error.InvalidSpec;
     const quality = std.fmt.parseInt(u8, quality_str, 10) catch return error.InvalidSpec;
 
     return .{
@@ -111,6 +111,82 @@ pub fn matchGlobPatternCaseInsensitive(pattern: []const u8, name: []const u8) bo
     }
 
     return glob.match(pattern_lower[0..pattern.len], name_lower[0..name.len]);
+}
+
+// ============================================================================
+// Page Range Parsing
+// ============================================================================
+
+pub const PageRange = struct {
+    start: u32,
+    end: u32, // inclusive
+
+    pub fn contains(self: PageRange, page: u32) bool {
+        return page >= self.start and page <= self.end;
+    }
+};
+
+/// Parse a page range string like "1-5,8,10-12" into a list of PageRanges
+pub fn parsePageRanges(allocator: std.mem.Allocator, range_str: []const u8, max_page: u32) ![]PageRange {
+    var ranges: std.ArrayListUnmanaged(PageRange) = .empty;
+    errdefer ranges.deinit(allocator);
+
+    var it = std.mem.splitSequence(u8, range_str, ",");
+    while (it.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " ");
+        if (trimmed.len == 0) continue;
+
+        if (std.mem.indexOf(u8, trimmed, "-")) |dash_pos| {
+            // Range like "1-5"
+            const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
+            const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
+
+            const start = std.fmt.parseInt(u32, start_str, 10) catch return error.InvalidPageRange;
+            const end = std.fmt.parseInt(u32, end_str, 10) catch return error.InvalidPageRange;
+
+            if (start == 0 or end == 0 or start > end or end > max_page) {
+                return error.InvalidPageRange;
+            }
+
+            try ranges.append(allocator, .{ .start = start, .end = end });
+        } else {
+            // Single page like "8"
+            const page = std.fmt.parseInt(u32, trimmed, 10) catch return error.InvalidPageRange;
+            if (page == 0 or page > max_page) {
+                return error.InvalidPageRange;
+            }
+            try ranges.append(allocator, .{ .start = page, .end = page });
+        }
+    }
+
+    return ranges.toOwnedSlice(allocator);
+}
+
+/// Check if a page number (1-based) is in any of the ranges
+pub fn isPageInRanges(page: u32, ranges: []const PageRange) bool {
+    for (ranges) |range| {
+        if (range.contains(page)) return true;
+    }
+    return false;
+}
+
+// ============================================================================
+// Path Utilities
+// ============================================================================
+
+/// Extract basename (filename without extension) from a path
+pub fn getBasename(path: []const u8) []const u8 {
+    // Find the last path separator
+    const filename = if (std.mem.lastIndexOfAny(u8, path, "/\\")) |pos|
+        path[pos + 1 ..]
+    else
+        path;
+
+    // Remove extension
+    return if (std.mem.lastIndexOfScalar(u8, filename, '.')) |pos|
+        filename[0..pos]
+    else
+        filename;
 }
 
 // ============================================================================
@@ -381,18 +457,18 @@ test "PageSize.parse invalid inputs" {
 test "parseOutputSpec valid specs" {
     const spec1 = try parseOutputSpec("300:png:0:page_{num}.png");
     try std.testing.expectApproxEqAbs(@as(f64, 300.0), spec1.dpi, 0.1);
-    try std.testing.expectEqual(image_writer.Format.png, spec1.format);
+    try std.testing.expectEqual(images.Format.png, spec1.format);
     try std.testing.expectEqual(@as(u8, 0), spec1.quality);
     try std.testing.expectEqualStrings("page_{num}.png", spec1.template);
 
     const spec2 = try parseOutputSpec("150:jpeg:85:thumb_{num0}.jpg");
     try std.testing.expectApproxEqAbs(@as(f64, 150.0), spec2.dpi, 0.1);
-    try std.testing.expectEqual(image_writer.Format.jpeg, spec2.format);
+    try std.testing.expectEqual(images.Format.jpeg, spec2.format);
     try std.testing.expectEqual(@as(u8, 85), spec2.quality);
     try std.testing.expectEqualStrings("thumb_{num0}.jpg", spec2.template);
 
     const spec3 = try parseOutputSpec("72:jpg:90:output.jpg");
-    try std.testing.expectEqual(image_writer.Format.jpeg, spec3.format);
+    try std.testing.expectEqual(images.Format.jpeg, spec3.format);
 }
 
 test "parseOutputSpec invalid specs" {
@@ -483,4 +559,160 @@ test "PageSize.StandardSize.fromString" {
 
 test "BLANK_PAGE constant" {
     try std.testing.expectEqualStrings(":blank", BLANK_PAGE);
+}
+
+test "getBasename" {
+    try std.testing.expectEqualStrings("document", getBasename("/path/to/document.pdf"));
+    try std.testing.expectEqualStrings("file", getBasename("file.txt"));
+    try std.testing.expectEqualStrings("noext", getBasename("noext"));
+}
+
+test "getBasename edge cases" {
+    try std.testing.expectEqualStrings("file", getBasename("file."));
+    try std.testing.expectEqualStrings("", getBasename(".hidden"));
+    try std.testing.expectEqualStrings("doc", getBasename("/doc.pdf"));
+    try std.testing.expectEqualStrings("doc", getBasename("C:\\path\\doc.pdf"));
+}
+
+test "parsePageRanges" {
+    const allocator = std.testing.allocator;
+
+    {
+        const ranges = try parsePageRanges(allocator, "1-5,8,10-12", 20);
+        defer allocator.free(ranges);
+
+        try std.testing.expectEqual(@as(usize, 3), ranges.len);
+        try std.testing.expectEqual(PageRange{ .start = 1, .end = 5 }, ranges[0]);
+        try std.testing.expectEqual(PageRange{ .start = 8, .end = 8 }, ranges[1]);
+        try std.testing.expectEqual(PageRange{ .start = 10, .end = 12 }, ranges[2]);
+    }
+}
+
+test "isPageInRanges" {
+    const ranges = [_]PageRange{
+        .{ .start = 1, .end = 5 },
+        .{ .start = 10, .end = 10 },
+    };
+
+    try std.testing.expect(isPageInRanges(1, &ranges));
+    try std.testing.expect(isPageInRanges(3, &ranges));
+    try std.testing.expect(isPageInRanges(5, &ranges));
+    try std.testing.expect(!isPageInRanges(6, &ranges));
+    try std.testing.expect(isPageInRanges(10, &ranges));
+    try std.testing.expect(!isPageInRanges(11, &ranges));
+}
+
+test "PageRange.contains" {
+    const range = PageRange{ .start = 5, .end = 10 };
+    try std.testing.expect(!range.contains(4));
+    try std.testing.expect(range.contains(5));
+    try std.testing.expect(range.contains(7));
+    try std.testing.expect(range.contains(10));
+    try std.testing.expect(!range.contains(11));
+}
+
+test "PageRange single page" {
+    const range = PageRange{ .start = 3, .end = 3 };
+    try std.testing.expect(!range.contains(2));
+    try std.testing.expect(range.contains(3));
+    try std.testing.expect(!range.contains(4));
+}
+
+test "parsePageRanges edge cases" {
+    const allocator = std.testing.allocator;
+
+    // With spaces
+    {
+        const ranges = try parsePageRanges(allocator, " 1 - 5 , 8 ", 20);
+        defer allocator.free(ranges);
+        try std.testing.expectEqual(@as(usize, 2), ranges.len);
+    }
+
+    // Empty parts ignored
+    {
+        const ranges = try parsePageRanges(allocator, "1,,3", 20);
+        defer allocator.free(ranges);
+        try std.testing.expectEqual(@as(usize, 2), ranges.len);
+    }
+}
+
+test "parsePageRanges errors" {
+    const allocator = std.testing.allocator;
+
+    // Page 0 is invalid
+    try std.testing.expectError(error.InvalidPageRange, parsePageRanges(allocator, "0", 20));
+
+    // Page exceeds max
+    try std.testing.expectError(error.InvalidPageRange, parsePageRanges(allocator, "25", 20));
+
+    // Start > end
+    try std.testing.expectError(error.InvalidPageRange, parsePageRanges(allocator, "10-5", 20));
+
+    // Invalid number
+    try std.testing.expectError(error.InvalidPageRange, parsePageRanges(allocator, "abc", 20));
+}
+
+/// Parse a page range string (e.g., "1-5,8,10-12") into a list of page numbers.
+/// If range_str is null, returns all pages from 1 to page_count.
+/// Returns error message on stderr and exits on invalid input.
+pub fn parsePageList(
+    allocator: std.mem.Allocator,
+    range_str: ?[]const u8,
+    page_count: u32,
+    stderr: *std.Io.Writer,
+) std.mem.Allocator.Error![]u32 {
+    var pages = std.array_list.Managed(u32).init(allocator);
+    errdefer pages.deinit();
+
+    if (range_str) |range| {
+        var range_it = std.mem.splitScalar(u8, range, ',');
+        while (range_it.next()) |part| {
+            const trimmed = std.mem.trim(u8, part, " ");
+            if (trimmed.len == 0) continue;
+
+            if (std.mem.indexOf(u8, trimmed, "-")) |dash_pos| {
+                const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
+                const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
+                const start = std.fmt.parseInt(u32, start_str, 10) catch {
+                    stderr.print("Invalid page range: {s}\n", .{part}) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                };
+                const end = std.fmt.parseInt(u32, end_str, 10) catch {
+                    stderr.print("Invalid page range: {s}\n", .{part}) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                };
+                if (start < 1 or end > page_count or start > end) {
+                    stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ part, page_count }) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                }
+                var p = start;
+                while (p <= end) : (p += 1) {
+                    try pages.append(p);
+                }
+            } else {
+                const page_num = std.fmt.parseInt(u32, trimmed, 10) catch {
+                    stderr.print("Invalid page number: {s}\n", .{trimmed}) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                };
+                if (page_num < 1 or page_num > page_count) {
+                    stderr.print("Invalid page number: {d} (document has {d} pages)\n", .{ page_num, page_count }) catch {};
+                    stderr.flush() catch {};
+                    std.process.exit(1);
+                }
+                try pages.append(page_num);
+            }
+        }
+    } else {
+        // All pages
+        var p: u32 = 1;
+        while (p <= page_count) : (p += 1) {
+            try pages.append(p);
+        }
+    }
+
+    return pages.toOwnedSlice() catch unreachable;
 }

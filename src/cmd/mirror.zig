@@ -3,6 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
+const cli_parsing = @import("../cli_parsing.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -100,7 +101,7 @@ pub fn run(
     const page_count = doc.getPageCount();
 
     // Parse page range or use all pages
-    const pages_to_mirror = try main.parsePageList(allocator, args.page_range, page_count, stderr);
+    const pages_to_mirror = try cli_parsing.parsePageList(allocator, args.page_range, page_count, stderr);
     defer allocator.free(pages_to_mirror);
 
     // Mirror each specified page

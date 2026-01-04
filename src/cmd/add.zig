@@ -3,7 +3,8 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const cli_parsing = @import("../cli_parsing.zig");
-const json_text = @import("../text/formatting.zig");
+const textfmt = @import("../pdfcontent/textfmt.zig");
+const images = @import("../pdfcontent/images.zig");
 const main = @import("../main.zig");
 
 const PageSize = cli_parsing.PageSize;
@@ -146,13 +147,13 @@ pub fn run(
 
         if (is_json) {
             // Handle JSON file with formatted text blocks
-            try json_text.addJsonToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
+            try textfmt.addJsonToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
         } else if (is_text) {
             // Handle text file
-            try main.addTextToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
+            try textfmt.addTextToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
         } else {
             // Handle image file
-            try main.addImageToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
+            try images.addImageToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
         }
     }
 

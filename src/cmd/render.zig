@@ -2,8 +2,7 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const renderer = @import("../renderer.zig");
-const image_writer = @import("../image_writer.zig");
+const images = @import("../pdfcontent/images.zig");
 const cli_parsing = @import("../cli_parsing.zig");
 const main = @import("../main.zig");
 
@@ -111,11 +110,11 @@ pub fn run(
     }
 
     // Parse page ranges
-    var page_ranges: ?[]renderer.PageRange = null;
+    var page_ranges: ?[]cli_parsing.PageRange = null;
     defer if (page_ranges) |ranges| allocator.free(ranges);
 
     if (args.page_range) |range_str| {
-        page_ranges = renderer.parsePageRanges(allocator, range_str, page_count) catch {
+        page_ranges = cli_parsing.parsePageRanges(allocator, range_str, page_count) catch {
             try stderr.print("Error: Invalid page range '{s}'\n", .{range_str});
             try stderr.flush();
             std.process.exit(1);
@@ -123,7 +122,7 @@ pub fn run(
     }
 
     // Get basename
-    const basename = renderer.getBasename(input_path);
+    const basename = cli_parsing.getBasename(input_path);
 
     // Render pages
     var rendered_count: u32 = 0;
@@ -131,7 +130,7 @@ pub fn run(
         const page_num: u32 = @intCast(i);
 
         if (page_ranges) |ranges| {
-            if (!renderer.isPageInRanges(page_num, ranges)) continue;
+            if (!cli_parsing.isPageInRanges(page_num, ranges)) continue;
         }
 
         var page = doc.loadPage(page_num - 1) catch {
@@ -155,7 +154,7 @@ pub fn run(
             bitmap.fillWhite();
             page.render(&bitmap, .{});
 
-            const filename = try image_writer.formatOutputPath(
+            const filename = try formatOutputPath(
                 allocator,
                 spec.template,
                 page_num,
@@ -168,7 +167,7 @@ pub fn run(
             const output_path = try std.fs.path.join(allocator, &.{ args.output_dir, filename });
             defer allocator.free(output_path);
 
-            image_writer.writeBitmap(bitmap, output_path, .{
+            images.writeBitmap(bitmap, output_path, .{
                 .format = spec.format,
                 .jpeg_quality = spec.quality,
             }) catch {
@@ -218,4 +217,106 @@ pub fn printUsage(stdout: *std.Io.Writer) void {
         \\  pdfzig render -O 300:png:0:{basename}_{num0}.png -O 72:jpeg:85:thumb_{num}.jpg doc.pdf
         \\
     ) catch {};
+}
+
+/// Format an output filename from a template
+pub fn formatOutputPath(
+    allocator: std.mem.Allocator,
+    template: []const u8,
+    page_num: u32,
+    total_pages: u32,
+    basename: []const u8,
+    format: images.Format,
+) ![]u8 {
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer result.deinit(allocator);
+
+    // Calculate padding width for zero-padded numbers
+    const padding_width = std.math.log10(total_pages) + 1;
+
+    var i: usize = 0;
+    while (i < template.len) {
+        if (template[i] == '{') {
+            // Find closing brace
+            const end = std.mem.indexOfScalarPos(u8, template, i + 1, '}') orelse {
+                try result.append(allocator, template[i]);
+                i += 1;
+                continue;
+            };
+
+            const var_name = template[i + 1 .. end];
+
+            if (std.mem.eql(u8, var_name, "num")) {
+                var buf: [32]u8 = undefined;
+                const num_str = std.fmt.bufPrint(&buf, "{d}", .{page_num}) catch unreachable;
+                try result.appendSlice(allocator, num_str);
+            } else if (std.mem.eql(u8, var_name, "num0")) {
+                var buf: [32]u8 = undefined;
+                const num_str = std.fmt.bufPrint(&buf, "{d:0>[1]}", .{ page_num, padding_width }) catch unreachable;
+                try result.appendSlice(allocator, num_str);
+            } else if (std.mem.eql(u8, var_name, "basename")) {
+                try result.appendSlice(allocator, basename);
+            } else if (std.mem.eql(u8, var_name, "ext")) {
+                try result.appendSlice(allocator, format.extension());
+            } else {
+                // Unknown variable, keep as-is
+                try result.appendSlice(allocator, template[i .. end + 1]);
+            }
+
+            i = end + 1;
+        } else {
+            try result.append(allocator, template[i]);
+            i += 1;
+        }
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+test "formatOutputPath" {
+    const allocator = std.testing.allocator;
+
+    {
+        const path = try formatOutputPath(allocator, "page_{num}.{ext}", 5, 100, "test", .png);
+        defer allocator.free(path);
+        try std.testing.expectEqualStrings("page_5.png", path);
+    }
+
+    {
+        const path = try formatOutputPath(allocator, "{basename}_{num0}.{ext}", 5, 100, "document", .jpeg);
+        defer allocator.free(path);
+        try std.testing.expectEqualStrings("document_005.jpg", path);
+    }
+}
+
+test "formatOutputPath with unknown variable" {
+    const allocator = std.testing.allocator;
+    const path = try formatOutputPath(allocator, "page_{unknown}.{ext}", 1, 10, "test", .png);
+    defer allocator.free(path);
+    try std.testing.expectEqualStrings("page_{unknown}.png", path);
+}
+
+test "formatOutputPath zero padding" {
+    const allocator = std.testing.allocator;
+
+    // Single digit total pages - no padding needed
+    {
+        const path = try formatOutputPath(allocator, "{num0}.png", 1, 9, "test", .png);
+        defer allocator.free(path);
+        try std.testing.expectEqualStrings("1.png", path);
+    }
+
+    // Two digit total pages
+    {
+        const path = try formatOutputPath(allocator, "{num0}.png", 1, 99, "test", .png);
+        defer allocator.free(path);
+        try std.testing.expectEqualStrings("01.png", path);
+    }
+
+    // Three digit total pages
+    {
+        const path = try formatOutputPath(allocator, "{num0}.png", 1, 100, "test", .png);
+        defer allocator.free(path);
+        try std.testing.expectEqualStrings("001.png", path);
+    }
 }

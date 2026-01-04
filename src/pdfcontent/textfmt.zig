@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const renderer = @import("../renderer.zig");
+const cli_parsing = @import("../cli_parsing.zig");
 
 // ============================================================================
 // JSON Text Extraction
@@ -28,7 +28,7 @@ pub fn extractTextAsJson(
     allocator: std.mem.Allocator,
     doc: *pdfium.Document,
     page_count: u32,
-    page_ranges: ?[]renderer.PageRange,
+    page_ranges: ?[]cli_parsing.PageRange,
     output: *std.Io.Writer,
 ) !void {
     try output.writeAll("{\"pages\":[");
@@ -38,7 +38,7 @@ pub fn extractTextAsJson(
         const page_num: u32 = @intCast(i);
 
         if (page_ranges) |ranges| {
-            if (!renderer.isPageInRanges(page_num, ranges)) continue;
+            if (!cli_parsing.isPageInRanges(page_num, ranges)) continue;
         }
 
         var page = doc.loadPage(page_num - 1) catch continue;
@@ -779,4 +779,100 @@ test "roundtrip: create PDF from JSON and extract text" {
 
     // Clean up temp file
     std.fs.cwd().deleteFile(tmp_path) catch {};
+}
+
+pub fn addTextToPage(
+    allocator: std.mem.Allocator,
+    doc: *pdfium.Document,
+    page: *pdfium.Page,
+    text_path: []const u8,
+    page_width: f64,
+    page_height: f64,
+    stderr: *std.Io.Writer,
+) !void {
+    // Read text file
+    const file = std.fs.cwd().openFile(text_path, .{}) catch {
+        try stderr.print("Error opening text file: {s}\n", .{text_path});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer file.close();
+
+    const text = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch {
+        try stderr.writeAll("Error reading text file\n");
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer allocator.free(text);
+
+    const font_size: f32 = 12.0;
+    const line_height: f64 = font_size * 1.2;
+    const margin: f64 = 72.0; // 1 inch margin
+    const max_width = page_width - 2 * margin;
+
+    var y_pos = page_height - margin - font_size;
+
+    // Split into lines and render each
+    var line_it = std.mem.splitScalar(u8, text, '\n');
+    while (line_it.next()) |line| {
+        if (y_pos < margin) break; // Out of page space
+
+        if (line.len == 0) {
+            y_pos -= line_height;
+            continue;
+        }
+
+        // Create text object
+        var text_obj = doc.createTextObject("Courier", font_size) catch {
+            try stderr.writeAll("Error creating text object\n");
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        // Convert UTF-8 to UTF-16LE for PDFium
+        var utf16_buf = std.array_list.Managed(u16).init(allocator);
+        defer utf16_buf.deinit();
+
+        var utf8_view = std.unicode.Utf8View.init(line) catch {
+            // If not valid UTF-8, try Latin-1
+            for (line) |byte| {
+                try utf16_buf.append(@as(u16, byte));
+            }
+            try utf16_buf.append(0); // Null terminator
+            if (!text_obj.setText(utf16_buf.items)) {
+                continue;
+            }
+            text_obj.transform(1, 0, 0, 1, margin, y_pos);
+            page.insertObject(text_obj);
+            y_pos -= line_height;
+            continue;
+        };
+
+        var it = utf8_view.iterator();
+        while (it.nextCodepoint()) |codepoint| {
+            if (codepoint <= 0xFFFF) {
+                try utf16_buf.append(@intCast(codepoint));
+            } else {
+                // Surrogate pair for codepoints > 0xFFFF
+                const cp = codepoint - 0x10000;
+                try utf16_buf.append(@intCast(0xD800 + (cp >> 10)));
+                try utf16_buf.append(@intCast(0xDC00 + (cp & 0x3FF)));
+            }
+        }
+        try utf16_buf.append(0); // Null terminator
+
+        if (!text_obj.setText(utf16_buf.items)) {
+            continue;
+        }
+
+        // Position the text
+        text_obj.transform(1, 0, 0, 1, margin, y_pos);
+
+        // Insert into page
+        page.insertObject(text_obj);
+
+        y_pos -= line_height;
+    }
+
+    _ = max_width; // Will be used for text wrapping in future
 }

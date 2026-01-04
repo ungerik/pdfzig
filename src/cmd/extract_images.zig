@@ -2,8 +2,8 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const renderer = @import("../renderer.zig");
-const image_writer = @import("../image_writer.zig");
+const cli_parsing = @import("../cli_parsing.zig");
+const images = @import("../pdfcontent/images.zig");
 const main = @import("../main.zig");
 
 const Args = struct {
@@ -11,7 +11,7 @@ const Args = struct {
     output_dir: []const u8 = ".",
     page_range: ?[]const u8 = null,
     password: ?[]const u8 = null,
-    format: image_writer.Format = .png,
+    format: images.Format = .png,
     quality: u8 = 90,
     quiet: bool = false,
     show_help: bool = false,
@@ -41,7 +41,7 @@ pub fn run(
                     try stderr.flush();
                     std.process.exit(1);
                 };
-                args.format = image_writer.Format.fromString(fmt_str) orelse {
+                args.format = images.Format.fromString(fmt_str) orelse {
                     try stderr.print("Error: Invalid format '{s}'\n", .{fmt_str});
                     try stderr.flush();
                     std.process.exit(1);
@@ -97,11 +97,11 @@ pub fn run(
     const page_count = doc.getPageCount();
 
     // Parse page ranges
-    var page_ranges: ?[]renderer.PageRange = null;
+    var page_ranges: ?[]cli_parsing.PageRange = null;
     defer if (page_ranges) |ranges| allocator.free(ranges);
 
     if (args.page_range) |range_str| {
-        page_ranges = renderer.parsePageRanges(allocator, range_str, page_count) catch {
+        page_ranges = cli_parsing.parsePageRanges(allocator, range_str, page_count) catch {
             try stderr.print("Error: Invalid page range '{s}'\n", .{range_str});
             try stderr.flush();
             std.process.exit(1);
@@ -115,7 +115,7 @@ pub fn run(
         const page_num: u32 = @intCast(i);
 
         if (page_ranges) |ranges| {
-            if (!renderer.isPageInRanges(page_num, ranges)) continue;
+            if (!cli_parsing.isPageInRanges(page_num, ranges)) continue;
         }
 
         var page = doc.loadPage(page_num - 1) catch continue;
@@ -138,7 +138,7 @@ pub fn run(
             const output_path = std.fs.path.join(allocator, &.{ args.output_dir, filename }) catch continue;
             defer allocator.free(output_path);
 
-            image_writer.writeBitmap(bitmap, output_path, .{
+            images.writeBitmap(bitmap, output_path, .{
                 .format = args.format,
                 .jpeg_quality = args.quality,
             }) catch {

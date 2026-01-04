@@ -3,7 +3,7 @@
 const std = @import("std");
 const zigimg = @import("zigimg");
 const zstbi = @import("zstbi");
-const pdfium = @import("pdfium/pdfium.zig");
+const pdfium = @import("../pdfium/pdfium.zig");
 
 pub const Format = enum {
     png,
@@ -150,76 +150,6 @@ fn convertBgraToRgb(
     return rgb;
 }
 
-/// Format an output filename from a template
-pub fn formatOutputPath(
-    allocator: std.mem.Allocator,
-    template: []const u8,
-    page_num: u32,
-    total_pages: u32,
-    basename: []const u8,
-    format: Format,
-) ![]u8 {
-    var result: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer result.deinit(allocator);
-
-    // Calculate padding width for zero-padded numbers
-    const padding_width = std.math.log10(total_pages) + 1;
-
-    var i: usize = 0;
-    while (i < template.len) {
-        if (template[i] == '{') {
-            // Find closing brace
-            const end = std.mem.indexOfScalarPos(u8, template, i + 1, '}') orelse {
-                try result.append(allocator, template[i]);
-                i += 1;
-                continue;
-            };
-
-            const var_name = template[i + 1 .. end];
-
-            if (std.mem.eql(u8, var_name, "num")) {
-                var buf: [32]u8 = undefined;
-                const num_str = std.fmt.bufPrint(&buf, "{d}", .{page_num}) catch unreachable;
-                try result.appendSlice(allocator, num_str);
-            } else if (std.mem.eql(u8, var_name, "num0")) {
-                var buf: [32]u8 = undefined;
-                const num_str = std.fmt.bufPrint(&buf, "{d:0>[1]}", .{ page_num, padding_width }) catch unreachable;
-                try result.appendSlice(allocator, num_str);
-            } else if (std.mem.eql(u8, var_name, "basename")) {
-                try result.appendSlice(allocator, basename);
-            } else if (std.mem.eql(u8, var_name, "ext")) {
-                try result.appendSlice(allocator, format.extension());
-            } else {
-                // Unknown variable, keep as-is
-                try result.appendSlice(allocator, template[i .. end + 1]);
-            }
-
-            i = end + 1;
-        } else {
-            try result.append(allocator, template[i]);
-            i += 1;
-        }
-    }
-
-    return result.toOwnedSlice(allocator);
-}
-
-test "formatOutputPath" {
-    const allocator = std.testing.allocator;
-
-    {
-        const path = try formatOutputPath(allocator, "page_{num}.{ext}", 5, 100, "test", .png);
-        defer allocator.free(path);
-        try std.testing.expectEqualStrings("page_5.png", path);
-    }
-
-    {
-        const path = try formatOutputPath(allocator, "{basename}_{num0}.{ext}", 5, 100, "document", .jpeg);
-        defer allocator.free(path);
-        try std.testing.expectEqualStrings("document_005.jpg", path);
-    }
-}
-
 test "Format.fromString" {
     try std.testing.expectEqual(Format.png, Format.fromString("png").?);
     try std.testing.expectEqual(Format.jpeg, Format.fromString("jpeg").?);
@@ -234,34 +164,138 @@ test "Format.extension" {
     try std.testing.expectEqualStrings("jpg", Format.jpeg.extension());
 }
 
-test "formatOutputPath with unknown variable" {
-    const allocator = std.testing.allocator;
-    const path = try formatOutputPath(allocator, "page_{unknown}.{ext}", 1, 10, "test", .png);
-    defer allocator.free(path);
-    try std.testing.expectEqualStrings("page_{unknown}.png", path);
-}
+pub fn addImageToPage(
+    allocator: std.mem.Allocator,
+    doc: *pdfium.Document,
+    page: *pdfium.Page,
+    image_path: []const u8,
+    page_width: f64,
+    page_height: f64,
+    stderr: *std.Io.Writer,
+) !void {
+    // Load image using zigimg
+    var read_buffer: [1024 * 1024]u8 = undefined;
+    var img = zigimg.Image.fromFilePath(allocator, image_path, &read_buffer) catch {
+        try stderr.print("Error loading image: {s}\n", .{image_path});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer img.deinit(allocator);
 
-test "formatOutputPath zero padding" {
-    const allocator = std.testing.allocator;
+    const img_width: f64 = @floatFromInt(img.width);
+    const img_height: f64 = @floatFromInt(img.height);
 
-    // Single digit total pages - no padding needed
-    {
-        const path = try formatOutputPath(allocator, "{num0}.png", 1, 9, "test", .png);
-        defer allocator.free(path);
-        try std.testing.expectEqualStrings("1.png", path);
+    // Calculate scale to fit page while maintaining aspect ratio
+    const scale_x = page_width / img_width;
+    const scale_y = page_height / img_height;
+    const scale = @min(scale_x, scale_y);
+
+    const scaled_width = img_width * scale;
+    const scaled_height = img_height * scale;
+
+    // Center on page
+    const x_offset = (page_width - scaled_width) / 2;
+    const y_offset = (page_height - scaled_height) / 2;
+
+    // Create bitmap in BGRA format for PDFium
+    var bitmap = pdfium.Bitmap.create(@intFromFloat(img_width), @intFromFloat(img_height), .bgra) catch {
+        try stderr.writeAll("Error creating bitmap\n");
+        try stderr.flush();
+        std.process.exit(1);
+    };
+    defer bitmap.destroy();
+
+    // Copy image data to bitmap (convert to BGRA)
+    const buffer = bitmap.getBuffer() orelse {
+        try stderr.writeAll("Error getting bitmap buffer\n");
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // Convert image pixels to BGRA
+    const width: usize = @intCast(img.width);
+    const height: usize = @intCast(img.height);
+    const stride: usize = @intCast(bitmap.stride);
+
+    // Handle different pixel formats using zigimg's PixelStorage union
+    switch (img.pixels) {
+        .rgba32 => |pixels| {
+            for (0..height) |y| {
+                for (0..width) |x| {
+                    const pix = pixels[y * width + x];
+                    const dst_idx = y * stride + x * 4;
+                    buffer[dst_idx + 0] = pix.b;
+                    buffer[dst_idx + 1] = pix.g;
+                    buffer[dst_idx + 2] = pix.r;
+                    buffer[dst_idx + 3] = pix.a;
+                }
+            }
+        },
+        .rgb24 => |pixels| {
+            for (0..height) |y| {
+                for (0..width) |x| {
+                    const pix = pixels[y * width + x];
+                    const dst_idx = y * stride + x * 4;
+                    buffer[dst_idx + 0] = pix.b;
+                    buffer[dst_idx + 1] = pix.g;
+                    buffer[dst_idx + 2] = pix.r;
+                    buffer[dst_idx + 3] = 255;
+                }
+            }
+        },
+        .bgra32 => |pixels| {
+            // Already BGRA, just copy
+            for (0..height) |y| {
+                for (0..width) |x| {
+                    const pix = pixels[y * width + x];
+                    const dst_idx = y * stride + x * 4;
+                    buffer[dst_idx + 0] = pix.b;
+                    buffer[dst_idx + 1] = pix.g;
+                    buffer[dst_idx + 2] = pix.r;
+                    buffer[dst_idx + 3] = pix.a;
+                }
+            }
+        },
+        .grayscale8 => |pixels| {
+            for (0..height) |y| {
+                for (0..width) |x| {
+                    const gray = pixels[y * width + x].value;
+                    const dst_idx = y * stride + x * 4;
+                    buffer[dst_idx + 0] = gray;
+                    buffer[dst_idx + 1] = gray;
+                    buffer[dst_idx + 2] = gray;
+                    buffer[dst_idx + 3] = 255;
+                }
+            }
+        },
+        else => {
+            try stderr.print("Unsupported image format: {s}\n", .{@tagName(img.pixels)});
+            try stderr.flush();
+            std.process.exit(1);
+        },
     }
 
-    // Two digit total pages
-    {
-        const path = try formatOutputPath(allocator, "{num0}.png", 1, 99, "test", .png);
-        defer allocator.free(path);
-        try std.testing.expectEqualStrings("01.png", path);
+    // Create image object
+    var img_obj = doc.createImageObject() catch {
+        try stderr.writeAll("Error creating image object\n");
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // Set the bitmap on the image object
+    if (!img_obj.setBitmap(bitmap)) {
+        try stderr.writeAll("Error setting bitmap on image object\n");
+        try stderr.flush();
+        std.process.exit(1);
     }
 
-    // Three digit total pages
-    {
-        const path = try formatOutputPath(allocator, "{num0}.png", 1, 100, "test", .png);
-        defer allocator.free(path);
-        try std.testing.expectEqualStrings("001.png", path);
+    // Position and scale the image
+    if (!img_obj.setImageMatrix(scaled_width, scaled_height, x_offset, y_offset)) {
+        try stderr.writeAll("Error positioning image\n");
+        try stderr.flush();
+        std.process.exit(1);
     }
+
+    // Insert image into page
+    page.insertObject(img_obj);
 }

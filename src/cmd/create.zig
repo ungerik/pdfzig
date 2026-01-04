@@ -3,7 +3,8 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const cli_parsing = @import("../cli_parsing.zig");
-const json_text = @import("../text/formatting.zig");
+const textfmt = @import("../pdfcontent/textfmt.zig");
+const images = @import("../pdfcontent/images.zig");
 const main = @import("../main.zig");
 
 const PageSize = cli_parsing.PageSize;
@@ -163,7 +164,7 @@ pub fn run(
                 };
                 defer page.close();
 
-                try json_text.addJsonToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
+                try textfmt.addJsonToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
 
                 if (!page.generateContent()) {
                     try stderr.writeAll("Error generating page content\n");
@@ -181,7 +182,7 @@ pub fn run(
                 };
                 defer page.close();
 
-                try main.addTextToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
+                try textfmt.addTextToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
 
                 if (!page.generateContent()) {
                     try stderr.writeAll("Error generating page content\n");
@@ -199,7 +200,7 @@ pub fn run(
                 };
                 defer page.close();
 
-                try main.addImageToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
+                try images.addImageToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
 
                 if (!page.generateContent()) {
                     try stderr.writeAll("Error generating page content\n");

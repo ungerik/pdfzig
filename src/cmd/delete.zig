@@ -3,6 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
+const cli_parsing = @import("../cli_parsing.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -140,13 +141,13 @@ pub fn run(
     }
 
     // Parse page range to get pages to delete
-    const pages_to_delete = try main.parsePageList(allocator, args.page_range, page_count, stderr);
+    const pages_to_delete = try cli_parsing.parsePageList(allocator, args.page_range, page_count, stderr);
     defer allocator.free(pages_to_delete);
 
     // Check if trying to delete all pages
     if (pages_to_delete.len >= page_count) {
-        try stderr.writeAll("Error: Cannot delete all pages. Omit page range to replace all pages with an empty page.\n");
         try stderr.flush();
+        try stderr.writeAll("Error: Cannot delete all pages. Omit page range to replace all pages with an empty page.\n");
         std.process.exit(1);
     }
 

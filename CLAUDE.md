@@ -51,11 +51,19 @@ Run the built executable directly:
 
 ## Architecture
 
+### Directory Structure
+
+- **src/main.zig** - CLI entry point with subcommand dispatch
+- **src/cli_parsing.zig** - CLI argument parsing utilities and shared types
+- **src/cmd/** - Command implementations (one file per command)
+- **src/pdfium/** - PDFium bindings and library management
+- **src/pdfcontent/** - PDF content generation (images, text formatting)
+
 ### Core Modules
 
-- **src/main.zig** - CLI entry point with subcommand parsing (render, extract_text, extract_images, extract_attachments, visual_diff, info, rotate, delete, add, attach, detach, download_pdfium). Each command has its own argument struct and run function. Global option `-link <path>` loads PDFium from a specific path (version parsed from filename pattern `libpdfium_v{VERSION}.ext`).
+- **src/main.zig** - CLI entry point with subcommand parsing (render, extract_text, extract_images, extract_attachments, visual_diff, info, rotate, mirror, delete, add, create, attach, detach, download_pdfium). Global option `--link <path>` loads PDFium from a specific path.
 
-- **src/pdfium.zig** - Idiomatic Zig bindings for PDFium. Key types:
+- **src/pdfium/pdfium.zig** - Idiomatic Zig bindings for PDFium. Key types:
   - `Document` - PDF document handle with metadata, attachment access, page deletion, and save functionality
   - `Page` - Page handle with rendering, rotation, and object iteration
   - `TextPage` - Text extraction with UTF-16LE to UTF-8 conversion
@@ -63,20 +71,20 @@ Run the built executable directly:
   - `ImageObject` / `ImageObjectIterator` - Embedded image extraction
   - `Attachment` / `AttachmentIterator` - Embedded file attachment access
 
-- **src/pdfium_loader.zig** - Runtime dynamic library loading infrastructure:
+- **src/pdfium/loader.zig** - Runtime dynamic library loading infrastructure:
   - `PdfiumLib` struct with function pointers for all PDFium APIs
   - Version detection from filename pattern `libpdfium_v{BUILD}.{ext}`
   - `findBestPdfiumLibrary()` - finds highest version in executable directory
 
-- **src/downloader.zig** - PDFium download and extraction:
+- **src/pdfium/downloader.zig** - PDFium download and extraction:
   - Native Zig HTTP via `std.http.Client`
   - Native gzip decompression via `std.compress.flate.Decompress`
   - Native tar extraction via `std.tar.pipeToFileSystem`
   - SHA256 hash verification from GitHub API
 
-- **src/renderer.zig** - Rendering coordination with page range parsing ("1-5,8,10-12" syntax)
+- **src/pdfcontent/images.zig** - Image I/O using zigimg (PNG) and zstbi (JPEG). Handles BGRA→RGBA/RGB conversion. Supports filename templates with `{num}`, `{num0}`, `{basename}`, `{ext}` variables. Also provides `addImageToPage()` for adding images to PDF pages.
 
-- **src/image_writer.zig** - Image output using zigimg (PNG) and zstbi (JPEG). Handles BGRA→RGBA/RGB conversion. Supports filename templates with `{num}`, `{num0}`, `{basename}`, `{ext}` variables.
+- **src/pdfcontent/textfmt.zig** - Text formatting and PDF text content generation. Provides `addTextToPage()` and `addJsonToPage()` for adding text content to PDF pages.
 
 ### Dependencies
 
@@ -94,15 +102,15 @@ Run the built executable directly:
 
 ## Testing
 
-- **src/info_test.zig** - Integration tests using real PDFs from [py-pdf/sample-files](https://github.com/py-pdf/sample-files)
-- **src/attachments_test.zig** - Tests using ZUGFeRD invoice PDFs from [ZUGFeRD/corpus](https://github.com/ZUGFeRD/corpus)
+- **src/cmd/info_test.zig** - Integration tests using real PDFs from [py-pdf/sample-files](https://github.com/py-pdf/sample-files)
+- **src/cmd/extract_attachments_test.zig** - Tests using ZUGFeRD invoice PDFs from [ZUGFeRD/corpus](https://github.com/ZUGFeRD/corpus)
 - Tests auto-download PDFs to `test-cache/` directory (gitignored) on first run
 - All HTTP downloads use native Zig (no curl dependency)
 
 ## Key Implementation Details
 
-- PDFium outputs BGRA; conversion to RGBA (PNG) or RGB (JPEG) happens in image_writer.zig
-- PDFium uses UTF-16LE for text; conversion to UTF-8 is in pdfium.zig
+- PDFium outputs BGRA; conversion to RGBA (PNG) or RGB (JPEG) happens in pdfcontent/images.zig
+- PDFium uses UTF-16LE for text; conversion to UTF-8 is in pdfium/pdfium.zig
 - Page numbers in CLI are 1-based; PDFium API uses 0-based internally
 - Multi-resolution output uses `-O DPI:FORMAT:QUALITY:TEMPLATE` syntax (can be repeated)
 - Zig 0.15 uses `.c` calling convention (not `.C`)
