@@ -8,6 +8,7 @@ A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
 - **Extract text** content from PDFs
 - **Extract images** embedded in PDF pages
 - **Extract attachments** embedded in PDFs with glob pattern filtering
+- **Visual diff** - compare two PDFs visually, pixel by pixel
 - **Display info** including metadata, page count, encryption status, attachments, and PDF version
 - Support for **password-protected** PDFs
 - **Multi-resolution output** - generate multiple image sizes in one pass
@@ -62,48 +63,69 @@ Output specification format: `DPI:FORMAT:QUALITY:TEMPLATE`
 
 ```bash
 # Print text to stdout
-pdfzig extract-text document.pdf
+pdfzig extract_text document.pdf
 
 # Save to file
-pdfzig extract-text -o output.txt document.pdf
+pdfzig extract_text -o output.txt document.pdf
 
 # Extract from specific pages
-pdfzig extract-text -p 1-10 document.pdf
+pdfzig extract_text -p 1-10 document.pdf
 ```
 
 ### Extract Embedded Images
 
 ```bash
 # Extract all images as PNG
-pdfzig extract-images document.pdf
+pdfzig extract_images document.pdf
 
 # Extract to specific directory as JPEG
-pdfzig extract-images -f jpeg -Q 90 document.pdf ./images
+pdfzig extract_images -f jpeg -Q 90 document.pdf ./images
 
 # Extract from specific pages
-pdfzig extract-images -p 1-5 document.pdf
+pdfzig extract_images -p 1-5 document.pdf
 ```
 
 ### Extract Attachments
 
 ```bash
 # Extract all attachments
-pdfzig extract-attachments document.pdf
+pdfzig extract_attachments document.pdf
 
 # Extract only XML files using glob pattern
-pdfzig extract-attachments document.pdf "*.xml"
+pdfzig extract_attachments document.pdf "*.xml"
 
 # Extract to specific directory
-pdfzig extract-attachments document.pdf "*.xml" ./xml-output
+pdfzig extract_attachments document.pdf "*.xml" ./xml-output
 
 # List all attachments without extracting
-pdfzig extract-attachments -l document.pdf
+pdfzig extract_attachments -l document.pdf
 
 # List only JSON files
-pdfzig extract-attachments -l document.pdf "*.json"
+pdfzig extract_attachments -l document.pdf "*.json"
 ```
 
 Pattern syntax: `*` matches any characters, `?` matches a single character
+
+### Visual Diff
+
+Compare two PDFs visually by rendering and comparing pixels:
+
+```bash
+# Compare two PDFs (exit code 0 = identical, 1 = different)
+pdfzig visual_diff original.pdf modified.pdf
+
+# Compare at higher resolution (default: 150 DPI)
+pdfzig visual_diff -d 300 doc1.pdf doc2.pdf
+
+# Generate diff images showing differences
+pdfzig visual_diff -o ./diffs doc1.pdf doc2.pdf
+
+# Compare encrypted PDFs
+pdfzig visual_diff -P secret1 -P secret2 enc1.pdf enc2.pdf
+```
+
+When `-o` is specified, grayscale diff images are created where each pixel's
+brightness represents the average RGB difference (black = identical, white = maximum difference).
 
 ### Display PDF Information
 
@@ -129,7 +151,7 @@ Attachments: 2
   invoice.xml [XML]
   data.json
 
-XML files: 1 (use 'extract-attachments "*.xml"' to extract)
+XML files: 1 (use 'extract_attachments "*.xml"' to extract)
 ```
 
 ### Password-Protected PDFs
@@ -139,7 +161,7 @@ All commands support the `-P` flag for encrypted PDFs:
 ```bash
 pdfzig info -P mypassword encrypted.pdf
 pdfzig render -P mypassword encrypted.pdf
-pdfzig extract-text -P mypassword encrypted.pdf
+pdfzig extract_text -P mypassword encrypted.pdf
 ```
 
 ## Supported Platforms
