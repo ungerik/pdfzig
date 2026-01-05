@@ -121,6 +121,7 @@ Run the built executable directly:
 ## Zig Code Rules
 
 - **ALWAYS** use `std.array_list.Managed(T).init(allocator)` instead of deprecated `std.ArrayList(T).init(allocator)`
+- **ALWAYS** use `std.fs.File.stdout()` instead of deprecated `std.io.getStdOut()`
 
 ## Markdown Rules
 
