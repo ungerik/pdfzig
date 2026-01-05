@@ -7,7 +7,39 @@ const loader = @import("loader.zig");
 const Allocator = std.mem.Allocator;
 
 /// Progress callback function type
-pub const ProgressCallback = *const fn (downloaded: u64, total: ?u64) void;
+/// When clear is true, the callback should clear the progress bar and print a final message
+pub const ProgressCallback = *const fn (downloaded: u64, total: ?u64, clear: bool) void;
+
+/// Standard progress bar display callback
+pub fn displayProgress(downloaded: u64, total: ?u64, clear: bool) void {
+    const stdout_file = std.fs.File.stdout();
+    var buf: [128]u8 = undefined;
+
+    const len = if (clear) blk: {
+        // Clear progress bar and show success message (downloaded contains the version number)
+        break :blk std.fmt.bufPrint(&buf, "\r                                                                                \rDownloaded PDFium build {d}\n\n", .{downloaded}) catch return;
+    } else if (total) |t| blk: {
+        const percent = if (t > 0) @as(u32, @intCast((downloaded * 100) / t)) else 0;
+        const bar_width: u32 = 40;
+        const filled = (percent * bar_width) / 100;
+
+        var bar: [40]u8 = undefined;
+        for (0..bar_width) |i| {
+            bar[i] = if (i < filled) '=' else if (i == filled) '>' else ' ';
+        }
+
+        const downloaded_mb = @as(f64, @floatFromInt(downloaded)) / (1024 * 1024);
+        const total_mb = @as(f64, @floatFromInt(t)) / (1024 * 1024);
+
+        break :blk std.fmt.bufPrint(&buf, "\r[{s}] {d:3}% {d:.1}/{d:.1} MB", .{ bar[0..bar_width], percent, downloaded_mb, total_mb }) catch return;
+    } else blk: {
+        const downloaded_mb = @as(f64, @floatFromInt(downloaded)) / (1024 * 1024);
+        break :blk std.fmt.bufPrint(&buf, "\rDownloaded: {d:.1} MB", .{downloaded_mb}) catch return;
+    };
+
+    _ = stdout_file.write(len) catch {};
+    stdout_file.sync() catch {};
+}
 
 pub const DownloadError = error{
     UnsupportedPlatform,
@@ -122,20 +154,15 @@ fn downloadAndExtractForTarget(
 
     // Try to fetch the expected hash from GitHub API
     const expected_hash = fetchExpectedHash(allocator, asset_name, version);
-    if (expected_hash) |_| {
-        std.debug.print("Retrieved SHA256 hash from GitHub\n", .{});
-    }
+    if (expected_hash) |_| {}
 
     // Download the archive with progress
     const archive_data = try httpGetWithProgress(allocator, url, &.{}, progress_cb);
     defer allocator.free(archive_data);
 
     if (archive_data.len < 1000) {
-        std.debug.print("Downloaded file too small ({d} bytes), download likely failed\n", .{archive_data.len});
         return DownloadError.DownloadFailed;
     }
-
-    std.debug.print("Downloaded {d} bytes\n", .{archive_data.len});
 
     // Verify hash if we have an expected hash
     if (expected_hash) |exp_hash| {
@@ -143,12 +170,10 @@ fn downloadAndExtractForTarget(
         const actual_hex = hashToHex(actual_hash);
 
         if (!std.mem.eql(u8, &actual_hex, &exp_hash)) {
-            std.debug.print("Hash mismatch!\n", .{});
             std.debug.print("Expected: {s}\n", .{exp_hash});
             std.debug.print("Actual:   {s}\n", .{actual_hex});
             return DownloadError.HashMismatch;
         }
-        std.debug.print("SHA256 hash verified\n", .{});
     }
 
     // Create a temporary directory for extraction
@@ -205,8 +230,6 @@ fn downloadAndExtractForTarget(
         break :blk @as(u32, 0);
     };
 
-    std.debug.print("PDFium version: {d}\n", .{actual_version});
-
     // Find the library in the appropriate subdirectory (lib/ for macOS/Linux, bin/ for Windows)
     const src_lib_name = getSourceLibNameForTarget(os);
     const src_lib_dir = getSourceLibDirForTarget(os);
@@ -225,8 +248,6 @@ fn downloadAndExtractForTarget(
         std.debug.print("Failed to copy library from {s} to {s}: {}\n", .{ lib_src_path, dest_path, err });
         return DownloadError.ExtractionFailed;
     };
-
-    std.debug.print("Installed: {s}\n", .{dest_filename});
 
     return actual_version;
 }
@@ -249,9 +270,12 @@ pub fn downloadPdfiumWithProgress(allocator: Allocator, version: ?u32, output_di
         try std.fmt.allocPrint(allocator, "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/{s}", .{asset_name});
     defer allocator.free(url);
 
-    std.debug.print("Downloading PDFium from: {s}\n", .{url});
-
     const actual_version = try downloadAndExtract(allocator, url, version, output_dir, progress_cb);
+
+    // Clear the progress bar
+    if (progress_cb) |cb| {
+        cb(actual_version, null, true);
+    }
 
     return actual_version;
 }
@@ -311,7 +335,7 @@ fn httpGetWithProgress(allocator: Allocator, url: []const u8, extra_headers: []c
         downloaded += bytes_read;
 
         if (progress_cb) |cb| {
-            cb(downloaded, content_length);
+            cb(downloaded, content_length, false);
         }
     }
 
@@ -390,20 +414,15 @@ fn downloadAndExtract(allocator: Allocator, url: []const u8, version: ?u32, outp
 
     // Try to fetch the expected hash from GitHub API
     const expected_hash = fetchExpectedHash(allocator, asset_name, version);
-    if (expected_hash) |_| {
-        std.debug.print("Retrieved SHA256 hash from GitHub\n", .{});
-    }
+    if (expected_hash) |_| {}
 
     // Download the archive with progress
     const archive_data = try httpGetWithProgress(allocator, url, &.{}, progress_cb);
     defer allocator.free(archive_data);
 
     if (archive_data.len < 1000) {
-        std.debug.print("Downloaded file too small ({d} bytes), download likely failed\n", .{archive_data.len});
         return DownloadError.DownloadFailed;
     }
-
-    std.debug.print("Downloaded {d} bytes\n", .{archive_data.len});
 
     // Verify hash if we have an expected hash
     if (expected_hash) |exp_hash| {
@@ -411,12 +430,10 @@ fn downloadAndExtract(allocator: Allocator, url: []const u8, version: ?u32, outp
         const actual_hex = hashToHex(actual_hash);
 
         if (!std.mem.eql(u8, &actual_hex, &exp_hash)) {
-            std.debug.print("Hash mismatch!\n", .{});
             std.debug.print("Expected: {s}\n", .{exp_hash});
             std.debug.print("Actual:   {s}\n", .{actual_hex});
             return DownloadError.HashMismatch;
         }
-        std.debug.print("SHA256 hash verified\n", .{});
     }
 
     // Create a temporary directory for extraction
@@ -475,8 +492,6 @@ fn downloadAndExtract(allocator: Allocator, url: []const u8, version: ?u32, outp
         break :blk @as(u32, 0);
     };
 
-    std.debug.print("PDFium version: {d}\n", .{actual_version});
-
     // Find the library in lib/ subdirectory
     const src_lib_name = getSourceLibName();
     const lib_src_path = try std.fs.path.join(allocator, &.{ tmp_dir, "lib", src_lib_name });
@@ -507,8 +522,6 @@ fn downloadAndExtract(allocator: Allocator, url: []const u8, version: ?u32, outp
         fix_child.spawn() catch {};
         _ = fix_child.wait() catch {};
     }
-
-    std.debug.print("Installed: {s}\n", .{dest_filename});
 
     return actual_version;
 }

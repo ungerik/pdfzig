@@ -10,36 +10,6 @@ const Args = struct {
     show_help: bool = false,
 };
 
-/// Display a progress bar for downloads
-fn displayProgress(downloaded: u64, total: ?u64) void {
-    const stderr_file = std.fs.File.stderr();
-    var buf: [128]u8 = undefined;
-
-    if (total) |t| {
-        const percent = if (t > 0) @as(u32, @intCast((downloaded * 100) / t)) else 0;
-        const bar_width: u32 = 40;
-        const filled = (percent * bar_width) / 100;
-
-        // Build progress bar
-        var bar: [40]u8 = undefined;
-        for (0..bar_width) |i| {
-            bar[i] = if (i < filled) '=' else if (i == filled) '>' else ' ';
-        }
-
-        // Format: [=====>     ] 45% 12.3/27.0 MB
-        const downloaded_mb = @as(f64, @floatFromInt(downloaded)) / (1024 * 1024);
-        const total_mb = @as(f64, @floatFromInt(t)) / (1024 * 1024);
-
-        const len = std.fmt.bufPrint(&buf, "\r[{s}] {d:3}% {d:.1}/{d:.1} MB", .{ bar[0..bar_width], percent, downloaded_mb, total_mb }) catch return;
-        _ = stderr_file.write(len) catch {};
-    } else {
-        // Unknown total size
-        const downloaded_mb = @as(f64, @floatFromInt(downloaded)) / (1024 * 1024);
-        const len = std.fmt.bufPrint(&buf, "\rDownloaded: {d:.1} MB", .{downloaded_mb}) catch return;
-        _ = stderr_file.write(len) catch {};
-    }
-}
-
 pub fn run(
     allocator: std.mem.Allocator,
     arg_it: *main.SliceArgIterator,
@@ -88,16 +58,12 @@ pub fn run(
     }
     stdout.flush() catch {};
 
-    const downloaded_version = downloader.downloadPdfiumWithProgress(allocator, args.build_version, exe_dir, displayProgress) catch |err| {
-        stderr.writeAll("\n") catch {}; // Clear progress line
+    _ = downloader.downloadPdfiumWithProgress(allocator, args.build_version, exe_dir, downloader.displayProgress) catch |err| {
+        stdout.writeAll("\n") catch {}; // Clear progress line on error
         stderr.print("Error: Download failed: {}\n", .{err}) catch {};
         stderr.flush() catch {};
         std.process.exit(1);
     };
-
-    // Clear progress line and show success
-    stderr.writeAll("\r\x1b[K") catch {}; // Clear line with ANSI escape
-    stdout.print("Successfully downloaded PDFium build {d}\n", .{downloaded_version}) catch {};
 
     // Show info about installed library
     if (loader.findBestPdfiumLibrary(allocator, exe_dir) catch null) |lib_info| {

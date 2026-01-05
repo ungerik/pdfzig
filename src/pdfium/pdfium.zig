@@ -112,7 +112,7 @@ pub fn initWithAllocator(allocator: std.mem.Allocator) Error!void {
 
     // No library found - try to download
     std.debug.print("PDFium library not found, downloading...\n", .{});
-    _ = downloader.downloadPdfium(allocator, null, exe_dir) catch {
+    _ = downloader.downloadPdfiumWithProgress(allocator, null, exe_dir, downloader.displayProgress) catch {
         return Error.LibraryLoadFailed;
     };
 

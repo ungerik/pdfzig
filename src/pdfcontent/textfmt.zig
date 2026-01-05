@@ -9,6 +9,41 @@ const pdfium = @import("../pdfium/pdfium.zig");
 const cli_parsing = @import("../cli_parsing.zig");
 
 // ============================================================================
+// UTF-8 to UTF-16 Conversion
+// ============================================================================
+
+/// Convert UTF-8 text to null-terminated UTF-16LE for PDFium.
+/// If the input is not valid UTF-8, falls back to Latin-1 encoding.
+fn encodeUtf8ToUtf16(allocator: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error!std.array_list.Managed(u16) {
+    var utf16_buf = std.array_list.Managed(u16).init(allocator);
+    errdefer utf16_buf.deinit();
+
+    var utf8_view = std.unicode.Utf8View.init(text) catch {
+        // If not valid UTF-8, fall back to Latin-1
+        for (text) |byte| {
+            try utf16_buf.append(@as(u16, byte));
+        }
+        try utf16_buf.append(0); // Null terminator
+        return utf16_buf;
+    };
+
+    var it = utf8_view.iterator();
+    while (it.nextCodepoint()) |codepoint| {
+        if (codepoint <= 0xFFFF) {
+            try utf16_buf.append(@intCast(codepoint));
+        } else {
+            // Surrogate pair for codepoints > 0xFFFF
+            const cp = codepoint - 0x10000;
+            try utf16_buf.append(@intCast(0xD800 + (cp >> 10)));
+            try utf16_buf.append(@intCast(0xDC00 + (cp & 0x3FF)));
+        }
+    }
+    try utf16_buf.append(0); // Null terminator
+
+    return utf16_buf;
+}
+
+// ============================================================================
 // JSON Text Extraction
 // ============================================================================
 
@@ -516,35 +551,8 @@ fn renderBlock(
     };
 
     // Convert UTF-8 to UTF-16LE for PDFium
-    var utf16_buf = std.array_list.Managed(u16).init(allocator);
+    var utf16_buf = encodeUtf8ToUtf16(allocator, text) catch return;
     defer utf16_buf.deinit();
-
-    var utf8_view = std.unicode.Utf8View.init(text) catch {
-        // If not valid UTF-8, try Latin-1
-        for (text) |byte| {
-            try utf16_buf.append(@as(u16, byte));
-        }
-        try utf16_buf.append(0);
-        if (!text_obj.setText(utf16_buf.items)) return;
-        // Color failure is non-fatal - object uses default black color
-        _ = text_obj.setFillColor(r, g, b, a);
-        text_obj.transform(1, 0, 0, 1, x, y);
-        page.insertObject(text_obj);
-        return;
-    };
-
-    var it = utf8_view.iterator();
-    while (it.nextCodepoint()) |codepoint| {
-        if (codepoint <= 0xFFFF) {
-            try utf16_buf.append(@intCast(codepoint));
-        } else {
-            // Surrogate pair for codepoints > 0xFFFF
-            const cp = codepoint - 0x10000;
-            try utf16_buf.append(@intCast(0xD800 + (cp >> 10)));
-            try utf16_buf.append(@intCast(0xDC00 + (cp & 0x3FF)));
-        }
-    }
-    try utf16_buf.append(0); // Null terminator
 
     if (!text_obj.setText(utf16_buf.items)) return;
 
@@ -826,36 +834,8 @@ pub fn addTextToPage(
         };
 
         // Convert UTF-8 to UTF-16LE for PDFium
-        var utf16_buf = std.array_list.Managed(u16).init(allocator);
+        var utf16_buf = encodeUtf8ToUtf16(allocator, line) catch continue;
         defer utf16_buf.deinit();
-
-        var utf8_view = std.unicode.Utf8View.init(line) catch {
-            // If not valid UTF-8, try Latin-1
-            for (line) |byte| {
-                try utf16_buf.append(@as(u16, byte));
-            }
-            try utf16_buf.append(0); // Null terminator
-            if (!text_obj.setText(utf16_buf.items)) {
-                continue;
-            }
-            text_obj.transform(1, 0, 0, 1, margin, y_pos);
-            page.insertObject(text_obj);
-            y_pos -= line_height;
-            continue;
-        };
-
-        var it = utf8_view.iterator();
-        while (it.nextCodepoint()) |codepoint| {
-            if (codepoint <= 0xFFFF) {
-                try utf16_buf.append(@intCast(codepoint));
-            } else {
-                // Surrogate pair for codepoints > 0xFFFF
-                const cp = codepoint - 0x10000;
-                try utf16_buf.append(@intCast(0xD800 + (cp >> 10)));
-                try utf16_buf.append(@intCast(0xDC00 + (cp & 0x3FF)));
-            }
-        }
-        try utf16_buf.append(0); // Null terminator
 
         if (!text_obj.setText(utf16_buf.items)) {
             continue;

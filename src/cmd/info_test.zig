@@ -2,9 +2,9 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
+const test_utils = @import("../test_utils.zig");
 
 const test_cache_dir = "test-cache";
-const files_json_url = "https://raw.githubusercontent.com/py-pdf/sample-files/refs/heads/main/files.json";
 const base_download_url = "https://raw.githubusercontent.com/py-pdf/sample-files/refs/heads/main/";
 
 /// Expected test file metadata from files.json
@@ -77,68 +77,9 @@ fn ensureTestFiles(allocator: std.mem.Allocator) !void {
 
     // Check each test file and download if missing
     for (test_files) |tf| {
-        const local_path = try std.fs.path.join(allocator, &.{ test_cache_dir, tf.path });
-        defer allocator.free(local_path);
-
-        // Check if file exists
-        const file = std.fs.cwd().openFile(local_path, .{}) catch |err| {
-            if (err == error.FileNotFound) {
-                // Need to download - create parent directories first
-                const dir_path = std.fs.path.dirname(local_path) orelse test_cache_dir;
-                std.fs.cwd().makePath(dir_path) catch {};
-
-                // Download the file
-                try downloadFile(allocator, tf.path, local_path);
-                continue;
-            }
-            return err;
-        };
-        file.close();
+        const local_path = try test_utils.ensureTestFile(allocator, base_download_url, tf.path, test_cache_dir);
+        allocator.free(local_path);
     }
-}
-
-/// Download a file from the sample-files repository using native Zig HTTP
-fn downloadFile(allocator: std.mem.Allocator, remote_path: []const u8, local_path: []const u8) !void {
-    const url = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_download_url, remote_path });
-    defer allocator.free(url);
-
-    std.debug.print("Downloading: {s}\n", .{remote_path});
-
-    // Use native Zig HTTP client
-    var client: std.http.Client = .{ .allocator = allocator };
-    defer client.deinit();
-
-    var response_writer: std.Io.Writer.Allocating = .init(allocator);
-    defer response_writer.deinit();
-
-    const result = client.fetch(.{
-        .location = .{ .url = url },
-        .response_writer = &response_writer.writer,
-    }) catch {
-        std.debug.print("HTTP request failed\n", .{});
-        return error.DownloadFailed;
-    };
-
-    if (result.status != .ok) {
-        std.debug.print("HTTP status: {}\n", .{result.status});
-        return error.DownloadFailed;
-    }
-
-    // Get the downloaded data and write to file
-    var list = response_writer.toArrayList();
-    const data = list.toOwnedSlice(allocator) catch return error.DownloadFailed;
-    defer allocator.free(data);
-
-    // Write to file
-    const file = std.fs.cwd().createFile(local_path, .{}) catch |err| {
-        std.debug.print("Failed to create file: {}\n", .{err});
-        return err;
-    };
-    defer file.close();
-    file.writeAll(data) catch |err| {
-        std.debug.print("Failed to write file: {}\n", .{err});
-        return err;
-    };
 }
 
 /// Get the local path for a test file
