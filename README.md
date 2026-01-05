@@ -233,6 +233,11 @@ Attachments: 2
 XML files: 1 (use 'extract_attachments "*.xml"' to extract)
 ```
 
+Use `--json` for machine-readable output with per-page dimensions:
+```bash
+pdfzig info --json document.pdf
+```
+
 ### Rotate Pages
 
 ```bash
