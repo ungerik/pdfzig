@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        # Automatically uses minimum_zig_version from build.zig.zon
+
+      - name: Build for all platforms
+        run: zig build all -Doptimize=ReleaseSafe
+
+      - name: Package binaries
+        run: |
+          cd zig-out
+          for dir in */; do
+            target="${dir%/}"
+            if [ -f "$target/pdfzig" ]; then
+              tar -czvf "pdfzig-$target.tar.gz" -C "$target" pdfzig
+            elif [ -f "$target/pdfzig.exe" ]; then
+              zip -j "pdfzig-$target.zip" "$target/pdfzig.exe"
+            fi
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            zig-out/*.tar.gz
+            zig-out/*.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: dist/*
