@@ -46,7 +46,7 @@ pub fn run(
                 args.rotation = 90;
             } else {
                 args.rotation = std.fmt.parseInt(i32, arg, 10) catch {
-                    stderr.print("Invalid rotation angle: {s}\n", .{arg}) catch {};
+                    try stderr.print("Invalid rotation angle: {s}\n", .{arg});
                     shared.exitWithErrorMsg(stderr, "Use: 90, 180, 270, -90, -180, -270, left, or right\n");
                 };
             }
@@ -61,8 +61,8 @@ pub fn run(
     const input_path = shared.requireInputPath(args.input_path, stderr, stdout, printUsage);
 
     const rotation = args.rotation orelse {
-        stderr.writeAll("Error: No rotation angle specified\n\n") catch {};
-        stderr.flush() catch {};
+        try stderr.writeAll("Error: No rotation angle specified\n\n");
+        try stderr.flush();
         printUsage(stdout);
         std.process.exit(1);
     };

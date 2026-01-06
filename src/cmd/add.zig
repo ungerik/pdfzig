@@ -43,8 +43,8 @@ pub fn run(
             } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--size")) {
                 if (arg_it.next()) |size_str| {
                     args.page_size = PageSize.parse(size_str) orelse {
-                        stderr.print("Invalid size: {s}\n", .{size_str}) catch {};
-                        stderr.print("Use: A4, Letter, 210x297mm, 8.5x11in, 612x792pt, or 612x792\n", .{}) catch {};
+                        try stderr.print("Invalid size: {s}\n", .{size_str});
+                        try stderr.print("Use: A4, Letter, 210x297mm, 8.5x11in, 612x792pt, or 612x792\n", .{});
                         shared.exitWithErrorMsg(stderr, "Add 'L' suffix for landscape: A4L, LetterL\n");
                     };
                 }
