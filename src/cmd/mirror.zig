@@ -4,6 +4,7 @@ const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
 const cli_parsing = @import("../cli_parsing.zig");
+const shared = @import("shared.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -38,9 +39,7 @@ pub fn run(
             } else if (std.mem.eql(u8, arg, "--leftright")) {
                 args.leftright = true;
             } else {
-                try stderr.print("Unknown option: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else if (args.input_path == null) {
             args.input_path = arg;
@@ -52,50 +51,18 @@ pub fn run(
         return;
     }
 
-    const input_path = args.input_path orelse {
-        try stderr.writeAll("Error: No input PDF file specified\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
-    };
+    const input_path = shared.requireInputPath(args.input_path, stderr, stdout, printUsage);
 
     // Default to leftright if neither specified
     if (!args.updown and !args.leftright) {
         args.leftright = true;
     }
 
-    // Determine output path
-    const output_path = args.output_path orelse input_path;
-    const overwrite_original = args.output_path == null;
-
-    // If overwriting, we need to save to a temp file first
-    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const actual_output_path = if (overwrite_original) blk: {
-        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
-            try stderr.writeAll("Error: Path too long\n");
-            try stderr.flush();
-            std.process.exit(1);
-        };
-        break :blk temp_path;
-    } else output_path;
+    // Setup temp file for in-place editing
+    const temp_ctx = shared.setupTempFileForInPlaceEdit(input_path, args.output_path, stderr);
 
     // Open the document
-    var doc = if (args.password) |pwd|
-        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
-            try stderr.print("Error opening PDF: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        }
-    else
-        pdfium.Document.open(input_path) catch |err| {
-            if (err == pdfium.Error.PasswordRequired) {
-                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
-            } else {
-                try stderr.print("Error opening PDF: {}\n", .{err});
-            }
-            try stderr.flush();
-            std.process.exit(1);
-        };
+    var doc = shared.openDocumentOrExit(input_path, args.password, stderr);
     defer doc.close();
 
     const page_count = doc.getPageCount();
@@ -106,11 +73,7 @@ pub fn run(
 
     // Mirror each specified page
     for (pages_to_mirror) |page_num| {
-        var page = doc.loadPage(page_num - 1) catch |err| {
-            try stderr.print("Error loading page {d}: {}\n", .{ page_num, err });
-            try stderr.flush();
-            std.process.exit(1);
-        };
+        var page = shared.loadPageOrExit(&doc, page_num, stderr);
         defer page.close();
 
         const page_width = page.getWidth();
@@ -134,29 +97,16 @@ pub fn run(
             }
         }
 
-        if (!page.generateContent()) {
-            try stderr.print("Error generating content for page {d}\n", .{page_num});
-            try stderr.flush();
-            std.process.exit(1);
-        }
+        shared.generatePageContentWithNumOrExit(&page, page_num, stderr);
     }
 
     // Save the document
-    doc.saveWithVersion(actual_output_path, null) catch |err| {
-        try stderr.print("Error saving PDF: {}\n", .{err});
-        try stderr.flush();
-        std.process.exit(1);
+    doc.saveWithVersion(temp_ctx.actual_output_path, null) catch |err| {
+        shared.exitWithError(stderr, "Error saving PDF: {}\n", .{err});
     };
 
-    // If overwriting original, rename temp file to original
-    if (overwrite_original) {
-        std.fs.cwd().deleteFile(input_path) catch {};
-        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
-            try stderr.print("Error replacing original file: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    }
+    // Complete temp file operation (rename if needed)
+    shared.completeTempFileEdit(temp_ctx, stderr);
 
     // Report success
     const mirror_type: []const u8 = if (args.leftright and args.updown)
@@ -172,9 +122,7 @@ pub fn run(
         try stdout.print("Mirrored {d} page(s) ({s})\n", .{ pages_to_mirror.len, mirror_type });
     }
 
-    if (!std.mem.eql(u8, output_path, input_path)) {
-        try stdout.print("Saved to: {s}\n", .{output_path});
-    }
+    shared.reportSaveSuccess(stdout, temp_ctx.output_path, temp_ctx.input_path);
 }
 
 pub fn printUsage(stdout: *std.Io.Writer) void {

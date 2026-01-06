@@ -3,6 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const cli_parsing = @import("../cli_parsing.zig");
+const shared = @import("shared.zig");
 const textfmt = @import("../pdfcontent/textfmt.zig");
 const images = @import("../pdfcontent/images.zig");
 const main = @import("../main.zig");
@@ -106,11 +107,7 @@ pub fn run(
                 try stderr.flush();
                 std.process.exit(1);
             };
-            if (!page.generateContent()) {
-                try stderr.writeAll("Error generating page content\n");
-                try stderr.flush();
-                std.process.exit(1);
-            }
+            shared.generatePageContentOrExit(&page, stderr);
             page.close();
             pages_added += 1;
             try stdout.writeAll("Added blank page\n");
@@ -166,11 +163,7 @@ pub fn run(
 
                 try textfmt.addJsonToPage(allocator, &doc, &page, source.path, stderr);
 
-                if (!page.generateContent()) {
-                    try stderr.writeAll("Error generating page content\n");
-                    try stderr.flush();
-                    std.process.exit(1);
-                }
+                shared.generatePageContentOrExit(&page, stderr);
                 pages_added += 1;
                 try stdout.print("Added page with formatted text from: {s}\n", .{std.fs.path.basename(source.path)});
             } else if (std.mem.eql(u8, ext_lower, ".txt") or std.mem.eql(u8, ext_lower, ".text")) {
@@ -184,11 +177,7 @@ pub fn run(
 
                 try textfmt.addTextToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
 
-                if (!page.generateContent()) {
-                    try stderr.writeAll("Error generating page content\n");
-                    try stderr.flush();
-                    std.process.exit(1);
-                }
+                shared.generatePageContentOrExit(&page, stderr);
                 pages_added += 1;
                 try stdout.print("Added page with text from: {s}\n", .{std.fs.path.basename(source.path)});
             } else {
@@ -202,11 +191,7 @@ pub fn run(
 
                 try images.addImageToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
 
-                if (!page.generateContent()) {
-                    try stderr.writeAll("Error generating page content\n");
-                    try stderr.flush();
-                    std.process.exit(1);
-                }
+                shared.generatePageContentOrExit(&page, stderr);
                 pages_added += 1;
                 try stdout.print("Added page with image from: {s}\n", .{std.fs.path.basename(source.path)});
             }

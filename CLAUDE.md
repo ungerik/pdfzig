@@ -87,6 +87,17 @@ Run the built executable directly:
 
 - **src/pdfcontent/textfmt.zig** - Text formatting and PDF text content generation. Provides `addTextToPage()` and `addJsonToPage()` for adding text content to PDF pages.
 
+- **src/cmd/shared.zig** - Shared utilities for command implementations to reduce code duplication:
+  - `exitWithError()` / `exitWithErrorMsg()` - Print error and exit with code 1
+  - `requireInputPath()` - Validate input path or exit with error
+  - `openDocumentOrExit()` - Open PDF with optional password, exit on error
+  - `loadPageOrExit()` - Load page from document, exit on error
+  - `parsePageRangesOrExit()` / `parsePageListOrExit()` - Parse page ranges with error handling
+  - `createOutputDirectory()` - Create output directory or exit on error
+  - `reportSaveSuccess()` - Report save success if output differs from input
+  - `setupTempFileForInPlaceEdit()` / `completeTempFileEdit()` - Handle temp file creation and rename for in-place editing
+  - `generatePageContentOrExit()` / `generatePageContentWithNumOrExit()` - Generate page content or exit on error
+
 ### Dependencies
 
 - **PDFium** - Downloaded at runtime from bblanchon/pdfium-binaries. Dynamically loaded via `std.DynLib`. Library named `libpdfium_v{BUILD}.dylib/so/dll`.

@@ -4,6 +4,7 @@ const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
 const cli_parsing = @import("../cli_parsing.zig");
+const shared = @import("shared.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -30,9 +31,7 @@ pub fn run(
             } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
                 args.password = arg_it.next();
             } else {
-                try stderr.print("Unknown option: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else if (args.input_path == null) {
             args.input_path = arg;
@@ -46,45 +45,13 @@ pub fn run(
         return;
     }
 
-    const input_path = args.input_path orelse {
-        try stderr.writeAll("Error: No input PDF file specified\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
-    };
+    const input_path = shared.requireInputPath(args.input_path, stderr, stdout, printUsage);
 
-    // Determine output path
-    const output_path = args.output_path orelse input_path;
-    const overwrite_original = args.output_path == null;
-
-    // If overwriting, we need to save to a temp file first
-    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const actual_output_path = if (overwrite_original) blk: {
-        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
-            try stderr.writeAll("Error: Path too long\n");
-            try stderr.flush();
-            std.process.exit(1);
-        };
-        break :blk temp_path;
-    } else output_path;
+    // Setup temp file for in-place editing
+    const temp_ctx = shared.setupTempFileForInPlaceEdit(input_path, args.output_path, stderr);
 
     // Open the document
-    var doc = if (args.password) |pwd|
-        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
-            try stderr.print("Error opening PDF: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        }
-    else
-        pdfium.Document.open(input_path) catch |err| {
-            if (err == pdfium.Error.PasswordRequired) {
-                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
-            } else {
-                try stderr.print("Error opening PDF: {}\n", .{err});
-            }
-            try stderr.flush();
-            std.process.exit(1);
-        };
+    var doc = shared.openDocumentOrExit(input_path, args.password, stderr);
     defer doc.close();
 
     const page_count = doc.getPageCount();
@@ -111,32 +78,19 @@ pub fn run(
 
         // Insert one empty page with same dimensions
         _ = doc.createPage(0, first_page_width, first_page_height) catch {
-            try stderr.writeAll("Error: Could not create empty page\n");
-            try stderr.flush();
-            std.process.exit(1);
+            shared.exitWithErrorMsg(stderr, "Error: Could not create empty page\n");
         };
 
         // Save the document
-        doc.saveWithVersion(actual_output_path, null) catch |err| {
-            try stderr.print("Error saving PDF: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
+        doc.saveWithVersion(temp_ctx.actual_output_path, null) catch |err| {
+            shared.exitWithError(stderr, "Error saving PDF: {}\n", .{err});
         };
 
-        // If overwriting original, rename temp file to original
-        if (overwrite_original) {
-            std.fs.cwd().deleteFile(input_path) catch {};
-            std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
-                try stderr.print("Error replacing original file: {}\n", .{err});
-                try stderr.flush();
-                std.process.exit(1);
-            };
-        }
+        // Complete temp file operation (rename if needed)
+        shared.completeTempFileEdit(temp_ctx, stderr);
 
         try stdout.print("Deleted all {d} pages, created empty page ({d}x{d})\n", .{ page_count, @as(u32, @intFromFloat(first_page_width)), @as(u32, @intFromFloat(first_page_height)) });
-        if (!std.mem.eql(u8, output_path, input_path)) {
-            try stdout.print("Saved to: {s}\n", .{output_path});
-        }
+        shared.reportSaveSuccess(stdout, temp_ctx.output_path, temp_ctx.input_path);
         return;
     }
 
@@ -146,9 +100,7 @@ pub fn run(
 
     // Check if trying to delete all pages
     if (pages_to_delete.len >= page_count) {
-        try stderr.writeAll("Error: Cannot delete all pages. Omit page range to replace all pages with an empty page.\n");
-        try stderr.flush();
-        std.process.exit(1);
+        shared.exitWithErrorMsg(stderr, "Error: Cannot delete all pages. Omit page range to replace all pages with an empty page.\n");
     }
 
     // Sort pages in descending order so we delete from the end first
@@ -160,35 +112,22 @@ pub fn run(
     // Delete pages (from highest to lowest index to avoid shifting issues)
     for (pages_to_delete) |page_num| {
         doc.deletePage(page_num - 1) catch |err| {
-            try stderr.print("Error deleting page {d}: {}\n", .{ page_num, err });
-            try stderr.flush();
-            std.process.exit(1);
+            shared.exitWithError(stderr, "Error deleting page {d}: {}\n", .{ page_num, err });
         };
     }
 
     // Save the document
-    doc.saveWithVersion(actual_output_path, null) catch |err| {
-        try stderr.print("Error saving PDF: {}\n", .{err});
-        try stderr.flush();
-        std.process.exit(1);
+    doc.saveWithVersion(temp_ctx.actual_output_path, null) catch |err| {
+        shared.exitWithError(stderr, "Error saving PDF: {}\n", .{err});
     };
 
-    // If overwriting original, rename temp file to original
-    if (overwrite_original) {
-        std.fs.cwd().deleteFile(input_path) catch {};
-        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
-            try stderr.print("Error replacing original file: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    }
+    // Complete temp file operation (rename if needed)
+    shared.completeTempFileEdit(temp_ctx, stderr);
 
     // Report success
     try stdout.print("Deleted {d} page(s), {d} page(s) remaining\n", .{ deleted_count, page_count - deleted_count });
 
-    if (!std.mem.eql(u8, output_path, input_path)) {
-        try stdout.print("Saved to: {s}\n", .{output_path});
-    }
+    shared.reportSaveSuccess(stdout, temp_ctx.output_path, temp_ctx.input_path);
 }
 
 pub fn printUsage(stdout: *std.Io.Writer) void {

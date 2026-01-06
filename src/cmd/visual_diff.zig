@@ -3,6 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const cli_parsing = @import("../cli_parsing.zig");
+const shared = @import("shared.zig");
 const zigimg = @import("zigimg");
 const main = @import("../main.zig");
 

@@ -4,6 +4,7 @@ const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
 const cli_parsing = @import("../cli_parsing.zig");
+const shared = @import("shared.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -58,12 +59,7 @@ pub fn run(
         return;
     }
 
-    const input_path = args.input_path orelse {
-        try stderr.writeAll("Error: No input PDF file specified\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
-    };
+    const input_path = shared.requireInputPath(args.input_path, stderr, stdout, printUsage);
 
     if (args.glob_pattern == null and args.indices.items.len == 0) {
         try stderr.writeAll("Error: Specify attachments to remove with -g (glob) or -i (index)\n\n");
@@ -72,37 +68,11 @@ pub fn run(
         std.process.exit(1);
     }
 
-    // Determine output path
-    const output_path = args.output_path orelse input_path;
-    const overwrite_original = args.output_path == null;
-
-    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const actual_output_path = if (overwrite_original) blk: {
-        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
-            try stderr.writeAll("Error: Path too long\n");
-            try stderr.flush();
-            std.process.exit(1);
-        };
-        break :blk temp_path;
-    } else output_path;
+    // Setup temp file for in-place editing
+    const temp_ctx = shared.setupTempFileForInPlaceEdit(input_path, args.output_path, stderr);
 
     // Open the document
-    var doc = if (args.password) |pwd|
-        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
-            try stderr.print("Error opening PDF: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        }
-    else
-        pdfium.Document.open(input_path) catch |err| {
-            if (err == pdfium.Error.PasswordRequired) {
-                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
-            } else {
-                try stderr.print("Error opening PDF: {}\n", .{err});
-            }
-            try stderr.flush();
-            std.process.exit(1);
-        };
+    var doc = shared.openDocumentOrExit(input_path, args.password, stderr);
     defer doc.close();
 
     const attachment_count = doc.getAttachmentCount();
@@ -164,26 +134,15 @@ pub fn run(
     }
 
     // Save the document
-    doc.saveWithVersion(actual_output_path, null) catch |err| {
-        try stderr.print("Error saving PDF: {}\n", .{err});
-        try stderr.flush();
-        std.process.exit(1);
+    doc.saveWithVersion(temp_ctx.actual_output_path, null) catch |err| {
+        shared.exitWithError(stderr, "Error saving PDF: {}\n", .{err});
     };
 
-    // If overwriting original, rename temp file
-    if (overwrite_original) {
-        std.fs.cwd().deleteFile(input_path) catch {};
-        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
-            try stderr.print("Error replacing original file: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    }
+    // Complete temp file operation (rename if needed)
+    shared.completeTempFileEdit(temp_ctx, stderr);
 
     try stdout.print("Removed {d} attachment(s)\n", .{deleted_count});
-    if (!std.mem.eql(u8, output_path, input_path)) {
-        try stdout.print("Saved to: {s}\n", .{output_path});
-    }
+    shared.reportSaveSuccess(stdout, temp_ctx.output_path, temp_ctx.input_path);
 }
 
 pub fn printUsage(stdout: *std.Io.Writer) void {

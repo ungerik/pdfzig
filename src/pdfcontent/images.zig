@@ -48,8 +48,9 @@ pub fn writeBitmap(
     switch (options.format) {
         .png => {
             // Convert BGRA to RGBA for zigimg (PNG supports alpha)
-            const pixels = try convertBgraToRgba(data, bitmap.width, bitmap.height, bitmap.stride);
-            defer std.heap.page_allocator.free(pixels);
+            const allocator = std.heap.page_allocator;
+            const pixels = try convertBgraToRgba(allocator, data, bitmap.width, bitmap.height, bitmap.stride);
+            defer allocator.free(pixels);
 
             // Create zigimg image with proper slice type
             const pixel_count = bitmap.width * bitmap.height;
@@ -98,14 +99,15 @@ pub fn writeBitmap(
 }
 
 /// Convert BGRA pixel data to RGBA (for PNG with alpha)
-fn convertBgraToRgba(
+pub fn convertBgraToRgba(
+    allocator: std.mem.Allocator,
     bgra_data: []const u8,
     width: u32,
     height: u32,
     stride: u32,
 ) ![]u8 {
-    const rgba = try std.heap.page_allocator.alloc(u8, width * height * 4);
-    errdefer std.heap.page_allocator.free(rgba);
+    const rgba = try allocator.alloc(u8, width * height * 4);
+    errdefer allocator.free(rgba);
 
     var dst_offset: usize = 0;
     for (0..height) |y| {

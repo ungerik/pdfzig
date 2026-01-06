@@ -3,6 +3,7 @@
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const images = @import("../pdfcontent/images.zig");
+const shared = @import("shared.zig");
 const cli_parsing = @import("../cli_parsing.zig");
 const main = @import("../main.zig");
 
@@ -92,11 +93,7 @@ pub fn run(
     }
 
     // Create output directory
-    std.fs.cwd().makePath(args.output_dir) catch |err| {
-        try stderr.print("Error: Could not create output directory: {}\n", .{err});
-        try stderr.flush();
-        std.process.exit(1);
-    };
+    shared.createOutputDirectory(args.output_dir, stderr);
 
     // Open document
     var doc = main.openDocument(input_path, args.password, stderr) orelse std.process.exit(1);
@@ -114,11 +111,7 @@ pub fn run(
     defer if (page_ranges) |ranges| allocator.free(ranges);
 
     if (args.page_range) |range_str| {
-        page_ranges = cli_parsing.parsePageRanges(allocator, range_str, page_count) catch {
-            try stderr.print("Error: Invalid page range '{s}'\n", .{range_str});
-            try stderr.flush();
-            std.process.exit(1);
-        };
+        page_ranges = shared.parsePageRangesOrExit(allocator, range_str, page_count, stderr);
     }
 
     // Get basename

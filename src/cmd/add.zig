@@ -6,6 +6,7 @@ const cli_parsing = @import("../cli_parsing.zig");
 const textfmt = @import("../pdfcontent/textfmt.zig");
 const images = @import("../pdfcontent/images.zig");
 const main = @import("../main.zig");
+const shared = @import("shared.zig");
 
 const PageSize = cli_parsing.PageSize;
 
@@ -36,27 +37,21 @@ pub fn run(
             } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--page")) {
                 if (arg_it.next()) |page_str| {
                     args.page_number = std.fmt.parseInt(u32, page_str, 10) catch {
-                        try stderr.print("Invalid page number: {s}\n", .{page_str});
-                        try stderr.flush();
-                        std.process.exit(1);
+                        shared.exitWithError(stderr, "Invalid page number: {s}\n", .{page_str});
                     };
                 }
             } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--size")) {
                 if (arg_it.next()) |size_str| {
                     args.page_size = PageSize.parse(size_str) orelse {
-                        try stderr.print("Invalid size: {s}\n", .{size_str});
-                        try stderr.print("Use: A4, Letter, 210x297mm, 8.5x11in, 612x792pt, or 612x792\n", .{});
-                        try stderr.print("Add 'L' suffix for landscape: A4L, LetterL\n", .{});
-                        try stderr.flush();
-                        std.process.exit(1);
+                        stderr.print("Invalid size: {s}\n", .{size_str}) catch {};
+                        stderr.print("Use: A4, Letter, 210x297mm, 8.5x11in, 612x792pt, or 612x792\n", .{}) catch {};
+                        shared.exitWithErrorMsg(stderr, "Add 'L' suffix for landscape: A4L, LetterL\n");
                     };
                 }
             } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
                 args.password = arg_it.next();
             } else {
-                try stderr.print("Unknown option: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else if (args.input_path == null) {
             args.input_path = arg;
@@ -70,45 +65,13 @@ pub fn run(
         return;
     }
 
-    const input_path = args.input_path orelse {
-        try stderr.writeAll("Error: No input PDF file specified\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
-    };
+    const input_path = shared.requireInputPath(args.input_path, stderr, stdout, printUsage);
 
-    // Determine output path
-    const output_path = args.output_path orelse input_path;
-    const overwrite_original = args.output_path == null;
-
-    // If overwriting, we need to save to a temp file first
-    var temp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const actual_output_path = if (overwrite_original) blk: {
-        const temp_path = std.fmt.bufPrint(&temp_path_buf, "{s}.tmp", .{input_path}) catch {
-            try stderr.writeAll("Error: Path too long\n");
-            try stderr.flush();
-            std.process.exit(1);
-        };
-        break :blk temp_path;
-    } else output_path;
+    // Setup temp file for in-place editing
+    const temp_ctx = shared.setupTempFileForInPlaceEdit(input_path, args.output_path, stderr);
 
     // Open the document
-    var doc = if (args.password) |pwd|
-        pdfium.Document.openWithPassword(input_path, pwd) catch |err| {
-            try stderr.print("Error opening PDF: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        }
-    else
-        pdfium.Document.open(input_path) catch |err| {
-            if (err == pdfium.Error.PasswordRequired) {
-                try stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n");
-            } else {
-                try stderr.print("Error opening PDF: {}\n", .{err});
-            }
-            try stderr.flush();
-            std.process.exit(1);
-        };
+    var doc = shared.openDocumentOrExit(input_path, args.password, stderr);
     defer doc.close();
 
     const page_count = doc.getPageCount();
@@ -158,28 +121,15 @@ pub fn run(
     }
 
     // Generate content for the new page
-    if (!new_page.generateContent()) {
-        try stderr.writeAll("Error generating page content\n");
-        try stderr.flush();
-        std.process.exit(1);
-    }
+    shared.generatePageContentOrExit(&new_page, stderr);
 
     // Save the document
-    doc.saveWithVersion(actual_output_path, null) catch |err| {
-        try stderr.print("Error saving PDF: {}\n", .{err});
-        try stderr.flush();
-        std.process.exit(1);
+    doc.saveWithVersion(temp_ctx.actual_output_path, null) catch |err| {
+        shared.exitWithError(stderr, "Error saving PDF: {}\n", .{err});
     };
 
-    // If overwriting original, rename temp file to original
-    if (overwrite_original) {
-        std.fs.cwd().deleteFile(input_path) catch {};
-        std.fs.cwd().rename(actual_output_path, input_path) catch |err| {
-            try stderr.print("Error replacing original file: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    }
+    // Complete temp file operation (rename if needed)
+    shared.completeTempFileEdit(temp_ctx, stderr);
 
     // Report success
     if (args.content_file) |content_path| {
@@ -188,9 +138,7 @@ pub fn run(
         try stdout.writeAll("Added empty page\n");
     }
 
-    if (!std.mem.eql(u8, output_path, input_path)) {
-        try stdout.print("Saved to: {s}\n", .{output_path});
-    }
+    shared.reportSaveSuccess(stdout, temp_ctx.output_path, temp_ctx.input_path);
 }
 
 pub fn printUsage(stdout: *std.Io.Writer) void {

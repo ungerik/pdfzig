@@ -1,0 +1,333 @@
+:root {
+    --bg-dark: #1a1a1a;
+    --bg-card: #2a2a2a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --accent: #4a9eff;
+    --readonly-warning: #ff9800;
+    --danger: #ff4444;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    padding-bottom: 50px;  /* Space for bottom bar */
+}
+
+#top-bar {
+    position: sticky;
+    top: 0;
+    background: var(--bg-card);
+    padding: 12px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 100;
+    gap: 20px;
+}
+
+#top-bar h1 {
+    margin: 0;
+    font-size: 1.5em;
+    color: var(--accent);
+}
+
+.controls {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.controls button {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid var(--text-secondary);
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: all 0.2s;
+}
+
+.controls button:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+}
+
+.controls button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.readonly-badge {
+    background: var(--readonly-warning);
+    color: #000;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 0.9em;
+}
+
+#bottom-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-card);
+    padding: 10px 20px;
+    text-align: center;
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    border-top: 1px solid rgba(255,255,255,0.1);
+    z-index: 50;
+}
+
+#bottom-bar a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+#bottom-bar a:hover {
+    text-decoration: underline;
+}
+
+#page-container {
+    padding: 20px;
+    min-height: calc(100vh - 120px);
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-secondary);
+    font-size: 1.1em;
+}
+
+.pages-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: flex-start;
+}
+
+.page-card {
+    position: relative;
+    background: white;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    overflow: hidden;
+}
+
+.page-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+.page-card[draggable="true"] {
+    cursor: move;
+}
+
+.page-thumbnail {
+    display: block;
+    max-height: calc((100vh - 120px) / 5 - 40px);
+    width: auto;
+    max-width: 300px;
+}
+
+.page-info {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,0.8);
+    color: white;
+    padding: 4px 8px;
+    font-size: 0.8em;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.page-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    padding: 10px;
+}
+
+.page-card:hover .page-overlay {
+    opacity: 1 !important;
+}
+
+/* Icon button hover effects */
+.page-overlay button:hover {
+    transform: scale(1.15);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+}
+
+.page-overlay button {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid var(--text-primary);
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    min-width: 120px;
+    transition: all 0.2s;
+}
+
+.page-overlay button:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+}
+
+.page-card[data-deleted="true"] {
+    opacity: 0.5;
+}
+
+.page-card[data-deleted="true"] .page-thumbnail {
+    filter: grayscale(1);
+}
+
+.page-card[data-modified="true"]:not([data-deleted="true"]) {
+    box-shadow: 0 0 0 3px var(--accent);
+}
+
+.page-card[data-modified="true"]:not([data-deleted="true"]):hover {
+    box-shadow: 0 0 0 3px var(--accent), 0 4px 16px rgba(0,0,0,0.5);
+}
+
+.page-card[data-deleted="true"]::after {
+    content: "DELETED";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-15deg);
+    background: var(--danger);
+    color: white;
+    padding: 8px 20px;
+    font-weight: bold;
+    font-size: 1.2em;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+.page-card[data-modified="true"] .page-info::after {
+    content: "✏️";
+    margin-left: 4px;
+}
+
+/* Modal styles */
+.modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal .close {
+    position: absolute;
+    top: 20px;
+    right: 40px;
+    color: white;
+    font-size: 40px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.modal .close:hover {
+    color: var(--accent);
+}
+
+#modal-img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+}
+
+/* Hide modification UI in readonly mode */
+body[data-readonly="true"] .page-overlay,
+body[data-readonly="true"] .controls,
+body[data-readonly="true"] .revert-btn,
+body[data-readonly="true"] .split-indicator,
+body[data-readonly="true"] button[onclick*="delete-all"],
+body[data-readonly="true"] button[onclick*="split"] {
+    display: none !important;
+}
+
+body[data-readonly="true"] #readonly-indicator {
+    display: block !important;
+}
+
+/* Document groups */
+.document-group {
+    margin-bottom: 40px;
+}
+
+.document-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 12px;
+    background: var(--bg-card);
+    border-radius: 4px;
+}
+
+.document-color {
+    width: 4px;
+    height: 40px;
+    border-radius: 2px;
+}
+
+.document-title {
+    flex: 1;
+    font-size: 1.2em;
+    font-weight: 500;
+}
+
+.document-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.document-actions button {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--text-secondary);
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.2s;
+}
+
+.document-actions button:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+}

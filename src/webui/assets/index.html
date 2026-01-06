@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>pdfzig WebUI</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="manifest" href="/site.webmanifest">
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.7/dist/htmx.min.js" integrity="sha384-ZBXiYtYQ6hJ2Y0ZNoYuI+Nq5MqWBr+chMrS/RkXpNzQCApHEhOt2aY8EJgqwHLkJ" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body data-readonly="{READONLY}">
+    <!-- Top Bar -->
+    <div id="top-bar">
+        <h1>pdfzig</h1>
+        <div id="readonly-indicator" style="display: none;">
+            <span class="readonly-badge">READ-ONLY MODE</span>
+        </div>
+        <div class="controls" id="controls">
+            <button onclick="document.getElementById('file-input').click()">
+                📁 Upload PDF
+            </button>
+            <input type="file" id="file-input" multiple accept=".pdf" hidden>
+            <button hx-get="/api/documents/download-all">💾 Download All</button>
+            <button hx-post="/api/reset" hx-confirm="Reset all documents to original state?" id="reset-btn">
+                🔄 Reset
+            </button>
+            <button hx-post="/api/clear" hx-confirm="Remove all documents?">🗑 Clear</button>
+        </div>
+    </div>
+
+    <!-- Page Container -->
+    <div id="page-container"
+         hx-get="/api/pages/list"
+         hx-trigger="intersect once, pageUpdate from:body"
+         hx-swap="innerHTML">
+        <div class="loading">Loading pages...</div>
+    </div>
+
+    <!-- Bottom Bar (Copyright) -->
+    <div id="bottom-bar">
+        Copyright &copy; 2026 by Erik Unger |
+        <a href="https://github.com/ungerik/pdfzig" target="_blank">github.com/ungerik/pdfzig</a>
+    </div>
+
+    <!-- Modal for full-screen page view -->
+    <div id="modal" class="modal" style="display:none">
+        <span class="close">&times;</span>
+        <img id="modal-img" alt="Page preview">
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

@@ -4,6 +4,7 @@ const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
 const main = @import("../main.zig");
 const cli_parsing = @import("../cli_parsing.zig");
+const shared = @import("shared.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -73,11 +74,7 @@ pub fn run(
 
     // Create output directory if not list-only mode
     if (!args.list_only) {
-        std.fs.cwd().makePath(args.output_dir) catch |err| {
-            try stderr.print("Error: Could not create output directory: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
-        };
+        shared.createOutputDirectory(args.output_dir, stderr);
     }
 
     // Open document
