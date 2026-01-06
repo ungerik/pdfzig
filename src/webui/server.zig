@@ -85,8 +85,6 @@ pub const Server = struct {
         const method = parts.next() orelse return;
         const target = parts.next() orelse return;
 
-        std.debug.print("{s} {s}\n", .{ method, target });
-
         // Dispatch to route handler
         try routes.dispatch(self.state, connection, method, target, self.readonly);
     }

@@ -59,13 +59,21 @@ pub fn dispatch(
         if (!is_post) return serveMethodNotAllowed(connection);
         if (readonly) return serveForbidden(connection);
         return handleClear(global_state, connection);
-    } else if (std.mem.eql(u8, target, "/api/settings/dpi")) {
+    } else if (std.mem.startsWith(u8, target, "/api/settings/dpi/")) {
         if (!is_post) return serveMethodNotAllowed(connection);
-        return handleUpdateDPI(global_state, connection);
-    } else if (std.mem.eql(u8, target, "/api/pages/reorder")) {
+        const dpi_str = target["/api/settings/dpi/".len..];
+        const dpi = std.fmt.parseFloat(f64, dpi_str) catch return serveError(connection, .bad_request, "Invalid DPI");
+        return handleUpdateDPI(global_state, connection, dpi);
+    } else if (std.mem.startsWith(u8, target, "/api/pages/reorder/")) {
         if (!is_post) return serveMethodNotAllowed(connection);
         if (readonly) return serveForbidden(connection);
-        return handleReorder(global_state, connection);
+        const path_after = target["/api/pages/reorder/".len..];
+        var parts = std.mem.splitScalar(u8, path_after, '/');
+        const source_str = parts.next() orelse return serveError(connection, .bad_request, "Missing source");
+        const target_str = parts.next() orelse return serveError(connection, .bad_request, "Missing target");
+        const source_id = PageId.parse(source_str) catch return serveError(connection, .bad_request, "Invalid source page ID");
+        const target_id = PageId.parse(target_str) catch return serveError(connection, .bad_request, "Invalid target page ID");
+        return handleReorder(global_state, connection, source_id, target_id);
     } else if (std.mem.eql(u8, target, "/api/documents/upload")) {
         if (!is_post) return serveMethodNotAllowed(connection);
         if (readonly) return serveForbidden(connection);
@@ -102,7 +110,13 @@ pub fn dispatch(
         const path_after_pages = target["/api/pages/".len..];
         var parts = std.mem.splitScalar(u8, path_after_pages, '/');
         const page_id_str = parts.next() orelse return serve404(connection);
-        const action = parts.next() orelse return serve404(connection);
+        const action_with_query = parts.next() orelse return serve404(connection);
+
+        // Strip query string from action (e.g., "thumbnail?v=123" -> "thumbnail")
+        const action = if (std.mem.indexOf(u8, action_with_query, "?")) |query_start|
+            action_with_query[0..query_start]
+        else
+            action_with_query;
 
         const page_id = PageId.parse(page_id_str) catch return serve404(connection);
 
@@ -111,11 +125,21 @@ pub fn dispatch(
         } else if (std.mem.eql(u8, action, "rotate")) {
             if (!is_post) return serveMethodNotAllowed(connection);
             if (readonly) return serveForbidden(connection);
-            return handleRotate(global_state, connection, page_id);
+            // Get degrees from next path segment
+            const degrees_str = parts.next() orelse return serveError(connection, .bad_request, "Missing degrees parameter");
+            const degrees = std.fmt.parseInt(i32, degrees_str, 10) catch return serveError(connection, .bad_request, "Invalid degrees");
+            return handleRotate(global_state, connection, page_id, degrees);
         } else if (std.mem.eql(u8, action, "mirror")) {
             if (!is_post) return serveMethodNotAllowed(connection);
             if (readonly) return serveForbidden(connection);
-            return handleMirror(global_state, connection, page_id);
+            // Get direction from next path segment
+            const direction_str = parts.next() orelse return serveError(connection, .bad_request, "Missing direction parameter");
+            const direction: operations.MirrorDirection = blk: {
+                if (std.mem.eql(u8, direction_str, "updown")) break :blk .updown;
+                if (std.mem.eql(u8, direction_str, "leftright")) break :blk .leftright;
+                return serveError(connection, .bad_request, "Invalid direction");
+            };
+            return handleMirror(global_state, connection, page_id, direction);
         } else if (std.mem.eql(u8, action, "delete")) {
             if (!is_post) return serveMethodNotAllowed(connection);
             if (readonly) return serveForbidden(connection);
@@ -352,7 +376,7 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
 
                 try html_writer.print(
                     \\<div class="page-card" data-page-id="{d}-{d}" data-deleted="{s}" data-modified="{s}" draggable="true" onclick="openModal('/api/pages/{d}-{d}/fullsize?dpi=150')" style="position: relative; display: inline-block;">
-                    \\  <img class="page-thumbnail" src="/api/pages/{d}-{d}/thumbnail" alt="Page {d}">
+                    \\  <img class="page-thumbnail" src="/api/pages/{d}-{d}/thumbnail?v={d}" alt="Page {d}">
                     \\  <div class="page-overlay" style="position: absolute; inset: 0; opacity: 0; transition: opacity 0.2s; pointer-events: none;">
                     \\    <button onclick="event.stopPropagation(); rotatePage('{d}-{d}', -90);" style="position: absolute; top: 2%; left: 2%; pointer-events: auto; background: rgba(0,0,0,0.8); color: white; border: none; border-radius: 50%; width: 15%; height: 15%; aspect-ratio: 1; cursor: pointer; font-size: 1em; display: flex; align-items: center; justify-content: center;" title="Rotate left">↺</button>
                     \\    <button onclick="event.stopPropagation(); rotatePage('{d}-{d}', 90);" style="position: absolute; top: 2%; right: 2%; pointer-events: auto; background: rgba(0,0,0,0.8); color: white; border: none; border-radius: 50%; width: 15%; height: 15%; aspect-ratio: 1; cursor: pointer; font-size: 1em; display: flex; align-items: center; justify-content: center;" title="Rotate right">↻</button>
@@ -371,6 +395,7 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
                     page_id.page_num,
                     page_id.doc_id,
                     page_id.page_num,
+                    global_state.change_version,
                     page.original_index + 1,
                     page_id.doc_id,
                     page_id.page_num,
@@ -478,29 +503,14 @@ fn serveThumbnail(global_state: *GlobalState, connection: std.net.Server.Connect
 }
 
 /// Parse JSON request body
-fn parseJsonBody(comptime T: type, connection: std.net.Server.Connection, allocator: std.mem.Allocator) !std.json.Parsed(T) {
-    var body_buffer: [1024]u8 = undefined;
-    const bytes_read = try connection.stream.read(&body_buffer);
-    const body = body_buffer[0..bytes_read];
+fn parseJsonBody(comptime T: type, body: []const u8, allocator: std.mem.Allocator) !std.json.Parsed(T) {
     return std.json.parseFromSlice(T, allocator, body, .{});
 }
 
 /// Handle rotate page request
-fn handleRotate(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId) !void {
-    const allocator = std.heap.page_allocator;
-
-    // Parse JSON: {"degrees": 90}
-    const parsed = parseJsonBody(
-        struct { degrees: i32 },
-        connection,
-        allocator,
-    ) catch {
-        return serveError(connection, .bad_request, "Invalid JSON");
-    };
-    defer parsed.deinit();
-
+fn handleRotate(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, degrees: i32) !void {
     // Perform rotation
-    operations.rotatePage(global_state, page_id.doc_id, page_id.page_num, parsed.value.degrees) catch {
+    operations.rotatePage(global_state, page_id.doc_id, page_id.page_num, degrees) catch {
         return serveError(connection, .internal_server_error, "Rotation failed");
     };
 
@@ -509,25 +519,7 @@ fn handleRotate(global_state: *GlobalState, connection: std.net.Server.Connectio
 }
 
 /// Handle mirror page request
-fn handleMirror(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId) !void {
-    const allocator = std.heap.page_allocator;
-
-    // Parse JSON: {"direction": "updown" | "leftright"}
-    const parsed = parseJsonBody(
-        struct { direction: []const u8 },
-        connection,
-        allocator,
-    ) catch {
-        return serveError(connection, .bad_request, "Invalid JSON");
-    };
-    defer parsed.deinit();
-
-    const direction: operations.MirrorDirection = blk: {
-        if (std.mem.eql(u8, parsed.value.direction, "updown")) break :blk .updown;
-        if (std.mem.eql(u8, parsed.value.direction, "leftright")) break :blk .leftright;
-        return serveError(connection, .bad_request, "Invalid direction");
-    };
-
+fn handleMirror(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, direction: operations.MirrorDirection) !void {
     // Perform mirror
     operations.mirrorPage(global_state, page_id.doc_id, page_id.page_num, direction) catch {
         return serveError(connection, .internal_server_error, "Mirror failed");
@@ -560,27 +552,7 @@ fn handleRevert(global_state: *GlobalState, connection: std.net.Server.Connectio
 }
 
 /// Handle reorder pages request
-fn handleReorder(global_state: *GlobalState, connection: std.net.Server.Connection) !void {
-    const allocator = std.heap.page_allocator;
-
-    // Parse JSON: {"source": "0-1", "target": "0-2"}
-    const parsed = parseJsonBody(
-        struct { source: []const u8, target: []const u8 },
-        connection,
-        allocator,
-    ) catch {
-        return serveError(connection, .bad_request, "Invalid JSON");
-    };
-    defer parsed.deinit();
-
-    const source_id = PageId.parse(parsed.value.source) catch {
-        return serveError(connection, .bad_request, "Invalid source page ID");
-    };
-
-    const target_id = PageId.parse(parsed.value.target) catch {
-        return serveError(connection, .bad_request, "Invalid target page ID");
-    };
-
+fn handleReorder(global_state: *GlobalState, connection: std.net.Server.Connection, source_id: PageId, target_id: PageId) !void {
     // Perform reorder
     operations.reorderPages(global_state, source_id, target_id) catch {
         return serveError(connection, .internal_server_error, "Reorder failed");
@@ -591,21 +563,9 @@ fn handleReorder(global_state: *GlobalState, connection: std.net.Server.Connecti
 }
 
 /// Handle update DPI request
-fn handleUpdateDPI(global_state: *GlobalState, connection: std.net.Server.Connection) !void {
-    const allocator = std.heap.page_allocator;
-
-    // Parse JSON: {"dpi": 96}
-    const parsed = parseJsonBody(
-        struct { dpi: f64 },
-        connection,
-        allocator,
-    ) catch {
-        return serveError(connection, .bad_request, "Invalid JSON");
-    };
-    defer parsed.deinit();
-
+fn handleUpdateDPI(global_state: *GlobalState, connection: std.net.Server.Connection, dpi: f64) !void {
     // Update DPI
-    operations.updateDPI(global_state, parsed.value.dpi) catch {
+    operations.updateDPI(global_state, dpi) catch {
         return serveError(connection, .internal_server_error, "DPI update failed");
     };
 

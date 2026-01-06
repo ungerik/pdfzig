@@ -141,3 +141,8 @@ Run the built executable directly:
 ## Documentation Rules
 
 - When a command is changed or added, update README.md and CLAUDE.md
+
+## HTTP routes
+
+- Encode simple request parameters in the URL path and avoid JSON body payloads
+- Use JSON for complex requests or responses

@@ -23,15 +23,12 @@ function calculateOptimalDPI() {
 
 function updateDPI() {
     const dpi = calculateOptimalDPI();
-    console.log('Updating DPI to:', dpi);
 
-    fetch('/api/settings/dpi', {
+    fetch(`/api/settings/dpi/${dpi}`, {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
             'X-Client-ID': clientId
-        },
-        body: JSON.stringify({ dpi })
+        }
     }).then(() => {
         // Trigger page reload
         htmx.trigger(document.body, 'pageUpdate');
@@ -79,18 +76,14 @@ document.addEventListener('drop', (e) => {
     const target = e.target.closest('.page-card');
 
     if (target && draggedElement && target !== draggedElement) {
-        console.log('Reordering pages:', draggedElement.dataset.pageId, 'to', target.dataset.pageId);
+        const sourceId = draggedElement.dataset.pageId;
+        const targetId = target.dataset.pageId;
 
-        fetch('/api/pages/reorder', {
+        fetch(`/api/pages/reorder/${sourceId}/${targetId}`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
                 'X-Client-ID': clientId
-            },
-            body: JSON.stringify({
-                source: draggedElement.dataset.pageId,
-                target: target.dataset.pageId
-            })
+            }
         }).then(response => {
             if (response.ok) {
                 htmx.trigger(document.body, 'pageUpdate');
@@ -111,7 +104,6 @@ if (fileInput) {
         if (!files || files.length === 0) return;
 
         for (const file of files) {
-            console.log('Uploading:', file.name);
             const formData = new FormData();
             formData.append('pdf', file);
 
@@ -181,33 +173,108 @@ document.addEventListener('keydown', (e) => {
 
 // Page operation functions
 function rotatePage(pageId, degrees) {
-    fetch(`/api/pages/${pageId}/rotate`, {
+    // Find the card and add loading spinner immediately
+    const card = document.querySelector(`.page-card[data-page-id="${pageId}"]`);
+    if (!card) return;
+
+    showLoadingSpinner(card);
+
+    fetch(`/api/pages/${pageId}/rotate/${degrees}`, {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
             'X-Client-ID': clientId
-        },
-        body: JSON.stringify({ degrees })
+        }
     }).then(response => {
         if (response.ok) {
-            htmx.trigger(document.body, 'pageUpdate');
+            // Update just the thumbnail image source with new version
+            updateThumbnail(card, pageId);
+        } else {
+            console.error('Rotation failed:', response.status);
+            hideLoadingSpinner(card);
         }
+    }).catch(err => {
+        console.error('Rotation error:', err);
+        hideLoadingSpinner(card);
     });
 }
 
 function mirrorPage(pageId, direction) {
-    fetch(`/api/pages/${pageId}/mirror`, {
+    // Find the card and add loading spinner immediately
+    const card = document.querySelector(`.page-card[data-page-id="${pageId}"]`);
+    if (!card) return;
+
+    showLoadingSpinner(card);
+
+    fetch(`/api/pages/${pageId}/mirror/${direction}`, {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
             'X-Client-ID': clientId
-        },
-        body: JSON.stringify({ direction })
+        }
     }).then(response => {
         if (response.ok) {
-            htmx.trigger(document.body, 'pageUpdate');
+            // Update just the thumbnail image source with new version
+            updateThumbnail(card, pageId);
+        } else {
+            console.error('Mirror failed:', response.status);
+            hideLoadingSpinner(card);
         }
+    }).catch(err => {
+        console.error('Mirror error:', err);
+        hideLoadingSpinner(card);
     });
+}
+
+// Show loading spinner overlay
+function showLoadingSpinner(card) {
+    // Don't add if already present
+    if (card.querySelector('.loading-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'loading-overlay';
+
+    const spinner = document.createElement('div');
+    spinner.className = 'loading-spinner';
+
+    overlay.appendChild(spinner);
+    card.appendChild(overlay);
+}
+
+// Hide loading spinner overlay
+function hideLoadingSpinner(card) {
+    const overlay = card.querySelector('.loading-overlay');
+    if (overlay) {
+        overlay.remove();
+    }
+}
+
+// Update thumbnail image without replacing DOM
+function updateThumbnail(card, pageId) {
+    const img = card.querySelector('.page-thumbnail');
+    if (!img) return;
+
+    // Get current version from URL or use timestamp
+    const timestamp = Date.now();
+    const newSrc = `/api/pages/${pageId}/thumbnail?v=${timestamp}`;
+
+    // Preload the new image
+    const tempImg = new Image();
+    tempImg.onload = () => {
+        // Image loaded successfully, update the src
+        img.src = newSrc;
+        hideLoadingSpinner(card);
+
+        // Mark page as modified (show blue border and edit indicator)
+        card.setAttribute('data-modified', 'true');
+
+        // Update reset button state and clear button confirmation
+        updateResetButtonState();
+        updateClearButtonConfirmation();
+    };
+    tempImg.onerror = () => {
+        console.error('Failed to load new thumbnail');
+        hideLoadingSpinner(card);
+    };
+    tempImg.src = newSrc;
 }
 
 function deletePage(pageId) {
@@ -242,11 +309,9 @@ function setupSSE() {
 
     eventSource.addEventListener('change', (e) => {
         const data = JSON.parse(e.data);
-        console.log('Change notification:', data);
 
         // Only reload if change was from another client
         if (data.clientId !== clientId) {
-            console.log('Reloading due to external change');
             htmx.trigger(document.body, 'pageUpdate');
         }
     });
