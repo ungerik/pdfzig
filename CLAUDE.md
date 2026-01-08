@@ -98,6 +98,28 @@ Run the built executable directly:
   - `setupTempFileForInPlaceEdit()` / `completeTempFileEdit()` - Handle temp file creation and rename for in-place editing
   - `generatePageContentOrExit()` / `generatePageContentWithNumOrExit()` - Generate page content or exit on error
 
+### WebUI
+
+- **src/webui/** - Web interface for visual PDF editing and manipulation
+  - **src/webui/assets/** - Static web assets (HTML, CSS, JS, favicons, icons)
+    - `index.html` - Main HTML template with `{READONLY}` placeholder
+    - `style.css` - CSS styling
+    - `app.js` - JavaScript frontend code
+    - `favicon.ico` and various PNG icons (16x16, 32x32, 48x48, apple-touch-icon, android-chrome)
+    - `site.webmanifest` - PWA manifest
+  - **src/webui/assets.zig** - Asset embedding using `@embedFile` directive
+    - All assets are compiled directly into the executable binary
+    - No external files needed at runtime
+  - **src/webui/routes.zig** - HTTP request routing and static asset serving
+    - Serves embedded assets with appropriate content types
+    - Handles API routes for document manipulation
+    - Template replacement for readonly mode flag
+  - **src/webui/server.zig** - HTTP server implementation
+  - **src/webui/state.zig** - Global state management for documents and pages
+  - **src/webui/operations.zig** - PDF operations (rotate, mirror, delete, reorder)
+  - **src/webui/page_renderer.zig** - Page thumbnail rendering with caching
+  - **src/webui/error_page.zig** - Error page rendering
+
 ### Dependencies
 
 - **PDFium** - Downloaded at runtime from bblanchon/pdfium-binaries. Dynamically loaded via `std.DynLib`. Library named `libpdfium_v{BUILD}.dylib/so/dll`.
