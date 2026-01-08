@@ -74,6 +74,13 @@ pub fn renderThumbnail(
     // Cache the result (whether success or error PNG)
     page_state.thumbnail_cache = png_bytes;
 
+    // Also save to original cache if this is the first render (no modifications)
+    if (page_state.original_thumbnail_cache == null and page_state.modifications.isEmpty()) {
+        // Duplicate the bytes for the original cache
+        const original_copy = try allocator.dupe(u8, png_bytes);
+        page_state.original_thumbnail_cache = original_copy;
+    }
+
     return png_bytes;
 }
 
@@ -132,7 +139,8 @@ pub fn renderFullSize(
         // Try to get page dimensions, fallback to square on error
         var width: f64 = 600;
         var height: f64 = 600;
-        if (doc.loadPage(page_index)) |page| {
+        if (doc.loadPage(page_index)) |pg| {
+            var page = pg;
             defer page.close();
             width = page.getWidth();
             height = page.getHeight();

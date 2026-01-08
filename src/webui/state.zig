@@ -98,7 +98,9 @@ pub const PageState = struct {
     original_index: u32, // original position in document (0-based)
     current_index: u32, // current position after reordering (0-based)
     modifications: PageModification,
-    thumbnail_cache: ?[]u8, // PNG bytes, owned by this struct
+    thumbnail_cache: ?[]u8, // PNG bytes for current state, owned by this struct
+    original_thumbnail_cache: ?[]u8, // PNG bytes for original unmodified state, owned by this struct
+    version: u32, // incremented on each modification, used for cache busting
     width: f64, // page width in PDF points
     height: f64, // page height in PDF points
 
@@ -106,6 +108,10 @@ pub const PageState = struct {
         if (self.thumbnail_cache) |cache| {
             allocator.free(cache);
             self.thumbnail_cache = null;
+        }
+        if (self.original_thumbnail_cache) |cache| {
+            allocator.free(cache);
+            self.original_thumbnail_cache = null;
         }
     }
 };
@@ -250,6 +256,8 @@ pub const GlobalState = struct {
                 .current_index = page_index,
                 .modifications = .{},
                 .thumbnail_cache = null,
+                .original_thumbnail_cache = null,
+                .version = 0,
                 .width = page.getWidth(),
                 .height = page.getHeight(),
             };

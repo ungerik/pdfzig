@@ -266,6 +266,10 @@ function updateThumbnail(card, pageId) {
         // Mark page as modified (show blue border and edit indicator)
         card.setAttribute('data-modified', 'true');
 
+        // Update document modified state
+        const docId = pageId.split('-')[0];
+        updateDocumentModifiedState(docId);
+
         // Update reset button state and clear button confirmation
         updateResetButtonState();
         updateClearButtonConfirmation();
@@ -278,19 +282,113 @@ function updateThumbnail(card, pageId) {
 }
 
 function deletePage(pageId) {
-    fetch(`/api/pages/${pageId}/delete`, {
-        method: 'POST',
-        headers: {
-            'X-Client-ID': clientId
-        }
-    }).then(response => {
-        if (response.ok) {
-            htmx.trigger(document.body, 'pageUpdate');
-        }
-    });
+    const card = document.querySelector(`.page-card[data-page-id="${pageId}"]`);
+    if (!card) return;
+
+    // Check if page is already deleted
+    const isDeleted = card.getAttribute('data-deleted') === 'true';
+
+    if (isDeleted) {
+        // Undelete: call revert endpoint
+        showLoadingSpinner(card);
+
+        fetch(`/api/pages/${pageId}/revert`, {
+            method: 'POST',
+            headers: {
+                'X-Client-ID': clientId
+            }
+        }).then(response => {
+            if (response.ok) {
+                // Remove deleted and modified states
+                card.setAttribute('data-deleted', 'false');
+                card.setAttribute('data-modified', 'false');
+
+                // Update delete button title back to "Delete"
+                const deleteBtn = card.querySelector('.btn-red');
+                if (deleteBtn) {
+                    deleteBtn.setAttribute('title', 'Delete');
+                }
+
+                // Remove revert button if present
+                const revertBtn = card.querySelector('.revert-btn');
+                if (revertBtn) {
+                    revertBtn.remove();
+                }
+
+                // Update document modified state
+                const docId = pageId.split('-')[0];
+                updateDocumentModifiedState(docId);
+
+                // Reload thumbnail to show original state
+                const img = card.querySelector('.page-thumbnail');
+                if (img) {
+                    const timestamp = Date.now();
+                    const newSrc = `/api/pages/${pageId}/thumbnail?v=${timestamp}`;
+
+                    const tempImg = new Image();
+                    tempImg.onload = () => {
+                        img.src = newSrc;
+                        hideLoadingSpinner(card);
+                        updateResetButtonState();
+                        updateClearButtonConfirmation();
+                    };
+                    tempImg.onerror = () => {
+                        console.error('Failed to load reverted thumbnail');
+                        hideLoadingSpinner(card);
+                    };
+                    tempImg.src = newSrc;
+                } else {
+                    hideLoadingSpinner(card);
+                }
+            } else {
+                console.error('Undelete failed:', response.status);
+                hideLoadingSpinner(card);
+            }
+        }).catch(err => {
+            console.error('Undelete error:', err);
+            hideLoadingSpinner(card);
+        });
+    } else {
+        // Delete: call delete endpoint
+        fetch(`/api/pages/${pageId}/delete`, {
+            method: 'POST',
+            headers: {
+                'X-Client-ID': clientId
+            }
+        }).then(response => {
+            if (response.ok) {
+                // Mark page as deleted and modified
+                card.setAttribute('data-deleted', 'true');
+                card.setAttribute('data-modified', 'true');
+
+                // Update delete button title to "Undelete"
+                const deleteBtn = card.querySelector('.btn-red');
+                if (deleteBtn) {
+                    deleteBtn.setAttribute('title', 'Undelete');
+                }
+
+                // Update document modified state
+                const docId = pageId.split('-')[0];
+                updateDocumentModifiedState(docId);
+
+                // Update reset button state and clear button confirmation
+                updateResetButtonState();
+                updateClearButtonConfirmation();
+            } else {
+                console.error('Delete failed:', response.status);
+            }
+        }).catch(err => {
+            console.error('Delete error:', err);
+        });
+    }
 }
 
 function revertPage(pageId) {
+    const card = document.querySelector(`.page-card[data-page-id="${pageId}"]`);
+    if (!card) return;
+
+    showLoadingSpinner(card);
+
     fetch(`/api/pages/${pageId}/revert`, {
         method: 'POST',
         headers: {
@@ -298,8 +396,48 @@ function revertPage(pageId) {
         }
     }).then(response => {
         if (response.ok) {
-            htmx.trigger(document.body, 'pageUpdate');
+            // Remove deleted and modified states
+            card.setAttribute('data-deleted', 'false');
+            card.setAttribute('data-modified', 'false');
+
+            // Remove revert button if present
+            const revertBtn = card.querySelector('.revert-btn');
+            if (revertBtn) {
+                revertBtn.remove();
+            }
+
+            // Update document modified state
+            const docId = pageId.split('-')[0];
+            updateDocumentModifiedState(docId);
+
+            // Reload thumbnail to show original state
+            const img = card.querySelector('.page-thumbnail');
+            if (img) {
+                const timestamp = Date.now();
+                const newSrc = `/api/pages/${pageId}/thumbnail?v=${timestamp}`;
+
+                const tempImg = new Image();
+                tempImg.onload = () => {
+                    img.src = newSrc;
+                    hideLoadingSpinner(card);
+                    updateResetButtonState();
+                    updateClearButtonConfirmation();
+                };
+                tempImg.onerror = () => {
+                    console.error('Failed to load reverted thumbnail');
+                    hideLoadingSpinner(card);
+                };
+                tempImg.src = newSrc;
+            } else {
+                hideLoadingSpinner(card);
+            }
+        } else {
+            console.error('Revert failed:', response.status);
+            hideLoadingSpinner(card);
         }
+    }).catch(err => {
+        console.error('Revert error:', err);
+        hideLoadingSpinner(card);
     });
 }
 
@@ -373,6 +511,59 @@ function updateClearButtonConfirmation() {
 window.addEventListener('load', updateClearButtonConfirmation);
 document.body.addEventListener('htmx:afterSwap', updateClearButtonConfirmation);
 
+// Update delete button titles based on page state
+function updateDeleteButtonTitles() {
+    document.querySelectorAll('.page-card').forEach(card => {
+        const isDeleted = card.getAttribute('data-deleted') === 'true';
+        const deleteBtn = card.querySelector('.btn-red');
+        if (deleteBtn) {
+            deleteBtn.setAttribute('title', isDeleted ? 'Undelete' : 'Delete');
+        }
+    });
+}
+
+// Update delete button titles on page load and after any change
+window.addEventListener('load', updateDeleteButtonTitles);
+document.body.addEventListener('htmx:afterSwap', updateDeleteButtonTitles);
+
+// Update document modified state based on its pages
+function updateDocumentModifiedState(docId) {
+    // Find the document group
+    const docGroup = document.querySelector(`.document-group[data-doc-id="${docId}"]`);
+    if (!docGroup) return;
+
+    // Check if any page in this document is modified
+    const pages = docGroup.querySelectorAll('.page-card');
+    let hasModifications = false;
+
+    pages.forEach(card => {
+        const pageDocId = card.getAttribute('data-page-id').split('-')[0];
+        if (pageDocId === docId.toString()) {
+            const isModified = card.getAttribute('data-modified') === 'true';
+            if (isModified) {
+                hasModifications = true;
+            }
+        }
+    });
+
+    // Update document group attribute
+    docGroup.setAttribute('data-modified', hasModifications ? 'true' : 'false');
+}
+
+// Update all documents' modified states
+function updateAllDocumentsModifiedState() {
+    document.querySelectorAll('.document-group').forEach(docGroup => {
+        const docId = docGroup.getAttribute('data-doc-id');
+        if (docId) {
+            updateDocumentModifiedState(docId);
+        }
+    });
+}
+
+// Update document modified states on page load and after any change
+window.addEventListener('load', updateAllDocumentsModifiedState);
+document.body.addEventListener('htmx:afterSwap', updateAllDocumentsModifiedState);
+
 // Add client ID to all htmx requests
 document.body.addEventListener('htmx:configRequest', (e) => {
     e.detail.headers['X-Client-ID'] = clientId;
@@ -391,6 +582,19 @@ function generateClientId() {
         const v = c === 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
+}
+
+// Download page or document choice
+function downloadPageOrDocument(pageId, docId) {
+    const pageOnly = confirm('Download only this page?\n\n(Cancel to download the whole document instead)');
+
+    if (pageOnly) {
+        // Download single page
+        window.location.href = `/api/pages/${pageId}/download`;
+    } else {
+        // Download whole document
+        window.location.href = `/api/documents/${docId}/download`;
+    }
 }
 
 console.log('pdfzig WebUI initialized with client ID:', clientId);

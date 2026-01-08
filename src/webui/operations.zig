@@ -35,7 +35,10 @@ pub fn rotatePage(
     // Update modification tracking
     page_state.modifications.rotation = @mod(page_state.modifications.rotation + degrees, 360);
 
-    // Invalidate thumbnail cache
+    // Increment version for cache busting
+    page_state.version +%= 1;
+
+    // Invalidate thumbnail cache (keep original)
     page_renderer.invalidateThumbnailCache(page_state, state.allocator);
 
     doc.modified = true;
@@ -94,7 +97,10 @@ pub fn mirrorPage(
         .leftright => page_state.modifications.mirror_lr = !page_state.modifications.mirror_lr,
     }
 
-    // Invalidate thumbnail cache
+    // Increment version for cache busting
+    page_state.version +%= 1;
+
+    // Invalidate thumbnail cache (keep original)
     page_renderer.invalidateThumbnailCache(page_state, state.allocator);
 
     doc.modified = true;
@@ -117,6 +123,9 @@ pub fn deletePage(
 
     // Toggle deleted state
     page_state.modifications.deleted = !page_state.modifications.deleted;
+
+    // Increment version for cache busting
+    page_state.version +%= 1;
 
     doc.modified = true;
     state.notifyChange();
@@ -164,8 +173,21 @@ pub fn revertPage(
     // Clear all modifications for this page
     page_state.modifications = .{};
 
-    // Invalidate thumbnail cache
-    page_renderer.invalidateThumbnailCache(page_state, state.allocator);
+    // Reset version
+    page_state.version = 0;
+
+    // Restore thumbnail from original cache if available
+    if (page_state.original_thumbnail_cache) |original| {
+        // Free current cache if it exists
+        if (page_state.thumbnail_cache) |current| {
+            state.allocator.free(current);
+        }
+        // Duplicate the original cache
+        page_state.thumbnail_cache = try state.allocator.dupe(u8, original);
+    } else {
+        // No original cache, invalidate so it re-renders
+        page_renderer.invalidateThumbnailCache(page_state, state.allocator);
+    }
 
     // Check if document still has any modifications
     var has_modifications = false;
@@ -273,7 +295,20 @@ pub fn resetAll(state: *GlobalState) !void {
         // Reset all page modifications
         for (doc.pages.items) |*page| {
             page.modifications = .{};
-            page_renderer.invalidateThumbnailCache(page, state.allocator);
+            page.version = 0;
+
+            // Restore thumbnail from original cache if available
+            if (page.original_thumbnail_cache) |original| {
+                // Free current cache if it exists
+                if (page.thumbnail_cache) |current| {
+                    allocator.free(current);
+                }
+                // Duplicate the original cache
+                page.thumbnail_cache = allocator.dupe(u8, original) catch null;
+            } else {
+                // No original cache, invalidate so it re-renders
+                page_renderer.invalidateThumbnailCache(page, allocator);
+            }
         }
 
         doc.modified = false;

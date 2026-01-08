@@ -148,6 +148,16 @@ pub fn dispatch(
             if (!is_post) return serveMethodNotAllowed(connection);
             if (readonly) return serveForbidden(connection);
             return handleRevert(global_state, connection, page_id);
+        } else if (std.mem.eql(u8, action, "download")) {
+            return handlePageDownload(global_state, connection, page_id);
+        } else if (std.mem.eql(u8, action, "fullsize")) {
+            // Get DPI from query string
+            const dpi_str = if (std.mem.indexOf(u8, action_with_query, "dpi=")) |dpi_start|
+                action_with_query[dpi_start + 4 ..]
+            else
+                "150";
+            const dpi = std.fmt.parseFloat(f64, dpi_str) catch 150.0;
+            return serveFullsizePage(global_state, connection, page_id, dpi);
         }
 
         return serve404(connection);
@@ -357,12 +367,23 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
         // Render each document as a group
         for (global_state.documents.items) |doc| {
             const color = doc.color;
+
+            // Check if document has any modifications
+            var has_modifications = false;
+            for (doc.pages.items) |page| {
+                if (!page.modifications.isEmpty()) {
+                    has_modifications = true;
+                    break;
+                }
+            }
+            const doc_modified_attr = if (has_modifications) "true" else "false";
+
             try html_writer.print(
                 \\<div style="position: relative; display: inline-block; margin: 20px;">
                 \\  <button onclick="window.location.href='/api/documents/{d}/download';" style="position: absolute; left: -40px; top: 50%; transform: translateY(-50%); background: rgba(0,150,0,0.9); color: white; border: none; border-radius: 8px; width: 35px; height: 60px; cursor: pointer; font-size: 1.2em; display: flex; align-items: center; justify-content: center; z-index: 5;" title="Download {s}">💾</button>
-                \\  <div class="document-group" title="{s}" style="display: inline-flex; padding: 20px; border-radius: 20px; background-color: rgb({d},{d},{d});">
+                \\  <div class="document-group" data-doc-id="{d}" data-modified="{s}" title="{s}" style="display: inline-flex; padding: 20px; border-radius: 20px; background-color: rgb({d},{d},{d});">
                 \\    <div class="pages-grid" style="display: flex; flex-wrap: wrap; gap: 10px;">
-            , .{ doc.id, doc.filename, doc.filename, color[0], color[1], color[2] });
+            , .{ doc.id, doc.filename, doc.id, doc_modified_attr, doc.filename, color[0], color[1], color[2] });
 
             // Render each page
             for (doc.pages.items, 0..) |page, page_idx| {
@@ -405,7 +426,7 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
                     \\        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
                     \\      </svg>
                     \\    </button>
-                    \\    <button onclick="event.stopPropagation(); window.location.href='/api/pages/{d}-{d}/download';" class="btn btn-round btn-blue btn-bottom-right" title="Download page">
+                    \\    <button onclick="event.stopPropagation(); downloadPageOrDocument('{d}-{d}', {d});" class="btn btn-round btn-blue btn-bottom-right" title="Download">
                     \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
                     \\        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
                     \\      </svg>
@@ -421,7 +442,7 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
                     page_id.page_num,
                     page_id.doc_id,
                     page_id.page_num,
-                    global_state.change_version,
+                    page.version,
                     page.original_index + 1,
                     page_id.doc_id,
                     page_id.page_num,
@@ -435,6 +456,7 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
                     page_id.page_num,
                     page_id.doc_id,
                     page_id.page_num,
+                    page_id.doc_id,
                 });
 
                 // Add revert button if page is modified (and not deleted)
@@ -536,6 +558,43 @@ fn serveThumbnail(global_state: *GlobalState, connection: std.net.Server.Connect
     try connection.stream.writeAll(png_bytes);
 }
 
+/// Serve full-size page image at specified DPI
+fn serveFullsizePage(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, dpi: f64) !void {
+    const allocator = std.heap.page_allocator;
+
+    // Get document and page
+    const doc = global_state.getDocument(page_id.doc_id) orelse return serve404(connection);
+    if (page_id.page_num >= doc.pages.items.len) return serve404(connection);
+
+    const page_state = &doc.pages.items[page_id.page_num];
+
+    // Render at full size (not cached)
+    const png_bytes = page_renderer.renderFullSize(
+        allocator,
+        doc.doc,
+        page_state.original_index,
+        dpi,
+    ) catch |err| {
+        std.debug.print("Error rendering full-size page: {}\n", .{err});
+        return serve404(connection);
+    };
+    defer allocator.free(png_bytes);
+
+    // Send PNG response
+    var buffer: [256]u8 = undefined;
+    const response =
+        "HTTP/1.1 200 OK\r\n" ++
+        "Content-Type: image/png\r\n" ++
+        "Content-Length: {d}\r\n" ++
+        "Cache-Control: no-cache\r\n" ++
+        "Connection: close\r\n" ++
+        "\r\n";
+
+    const response_str = try std.fmt.bufPrint(&buffer, response, .{png_bytes.len});
+    try connection.stream.writeAll(response_str);
+    try connection.stream.writeAll(png_bytes);
+}
+
 /// Parse JSON request body
 fn parseJsonBody(comptime T: type, body: []const u8, allocator: std.mem.Allocator) !std.json.Parsed(T) {
     return std.json.parseFromSlice(T, allocator, body, .{});
@@ -583,6 +642,131 @@ fn handleRevert(global_state: *GlobalState, connection: std.net.Server.Connectio
 
     // Send success response
     try serveJson(connection, "{\"success\":true}");
+}
+
+/// Handle page download request (download single page as PDF)
+fn handlePageDownload(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    global_state.lock();
+    defer global_state.unlock();
+
+    // Get the document
+    const doc = global_state.getDocument(page_id.doc_id) orelse {
+        return serveError(connection, .not_found, "Document not found");
+    };
+
+    // Validate page index
+    if (page_id.page_num >= doc.pages.items.len) {
+        return serveError(connection, .not_found, "Page not found");
+    }
+
+    const page_state = &doc.pages.items[page_id.page_num];
+
+    // Note: Deleted pages can still be downloaded since the original is in memory
+
+    // Create a new empty PDF document
+    var new_doc = pdfium.Document.createNew() catch {
+        return serveError(connection, .internal_server_error, "Failed to create new document");
+    };
+    defer new_doc.close();
+
+    // Import the single page (use original_index as that's the index in the PDFium document)
+    const page_indices = [_]c_int{@intCast(page_state.original_index)};
+    if (!new_doc.importPages(&doc.doc, &page_indices, 0)) {
+        return serveError(connection, .internal_server_error, "Failed to import page");
+    }
+
+    // Apply modifications if any (ignore deleted flag - just apply rotation/mirror)
+    const has_visual_modifications = page_state.modifications.rotation != 0 or
+        page_state.modifications.mirror_ud or
+        page_state.modifications.mirror_lr;
+
+    if (has_visual_modifications) {
+        // Load the newly imported page (it's at index 0 in the new document)
+        var page = new_doc.loadPage(0) catch {
+            return serveError(connection, .internal_server_error, "Failed to load imported page");
+        };
+        defer page.close();
+
+        // Apply rotation
+        if (page_state.modifications.rotation != 0) {
+            if (!page.rotate(@intCast(page_state.modifications.rotation))) {
+                return serveError(connection, .internal_server_error, "Failed to apply rotation");
+            }
+        }
+
+        // Apply mirrors
+        const page_width = page.getWidth();
+        const page_height = page.getHeight();
+        const object_count = page.getObjectCount();
+
+        if (page_state.modifications.mirror_ud or page_state.modifications.mirror_lr) {
+            var i: u32 = 0;
+            while (i < object_count) : (i += 1) {
+                if (page.getObject(i)) |obj| {
+                    if (page_state.modifications.mirror_ud) {
+                        obj.transform(1, 0, 0, -1, 0, page_height);
+                    }
+                    if (page_state.modifications.mirror_lr) {
+                        obj.transform(-1, 0, 0, 1, page_width, 0);
+                    }
+                }
+            }
+        }
+
+        // Generate content to apply transformations
+        if (!page.generateContent()) {
+            return serveError(connection, .internal_server_error, "Failed to generate content");
+        }
+    }
+
+    // Save to temporary file
+    const temp_path = try std.fmt.allocPrint(
+        allocator,
+        "/tmp/pdfzig-page-download-{d}.pdf",
+        .{std.time.milliTimestamp()},
+    );
+
+    new_doc.saveWithVersion(temp_path, null) catch {
+        return serveError(connection, .internal_server_error, "Failed to save PDF");
+    };
+    defer std.fs.cwd().deleteFile(temp_path) catch {};
+
+    // Read file to serve
+    const file = try std.fs.cwd().openFile(temp_path, .{});
+    defer file.close();
+
+    const file_size = try file.getEndPos();
+    const pdf_data = try file.readToEndAlloc(allocator, file_size);
+
+    // Generate filename - strip .pdf extension if present
+    const base_name = if (std.mem.endsWith(u8, doc.filename, ".pdf"))
+        doc.filename[0 .. doc.filename.len - 4]
+    else
+        doc.filename;
+
+    const filename = try std.fmt.allocPrint(
+        allocator,
+        "{s}_page_{d}.pdf",
+        .{ base_name, page_state.original_index + 1 },
+    );
+
+    // Send PDF with appropriate headers
+    const response_header = try std.fmt.allocPrint(
+        allocator,
+        "HTTP/1.1 200 OK\r\n" ++
+            "Content-Type: application/pdf\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Content-Disposition: attachment; filename=\"{s}\"\r\n" ++
+            "\r\n",
+        .{ pdf_data.len, filename },
+    );
+
+    try connection.stream.writeAll(response_header);
+    try connection.stream.writeAll(pdf_data);
 }
 
 /// Handle reorder pages request
@@ -693,17 +877,50 @@ fn sendPdfDownload(
     doc: *state_mod.DocumentState,
     allocator: std.mem.Allocator,
 ) !void {
-    // Save document to temporary file
+    // Check if any pages are deleted
+    var has_deleted_pages = false;
+    for (doc.pages.items) |page| {
+        if (page.modifications.deleted) {
+            has_deleted_pages = true;
+            break;
+        }
+    }
+
     const temp_path = try std.fmt.allocPrint(
         allocator,
         "/tmp/pdfzig-download-{d}.pdf",
         .{std.time.milliTimestamp()},
     );
-    // Arena allocator cleans up automatically
-
-    // Save with modifications applied
-    try doc.doc.saveWithVersion(temp_path, null);
     defer std.fs.cwd().deleteFile(temp_path) catch {};
+
+    if (has_deleted_pages) {
+        // Create new document with only non-deleted pages
+        var new_doc = pdfium.Document.createNew() catch {
+            return serveError(connection, .internal_server_error, "Failed to create document");
+        };
+        defer new_doc.close();
+
+        // Import non-deleted pages
+        for (doc.pages.items) |page| {
+            if (!page.modifications.deleted) {
+                // Import this page
+                const page_indices = [_]c_int{@intCast(page.original_index)};
+                if (!new_doc.importPages(&doc.doc, &page_indices, 0xFFFFFFFF)) { // append to end
+                    return serveError(connection, .internal_server_error, "Failed to import page");
+                }
+            }
+        }
+
+        // Save the new document
+        new_doc.saveWithVersion(temp_path, null) catch {
+            return serveError(connection, .internal_server_error, "Failed to save document");
+        };
+    } else {
+        // No deleted pages, save document as-is with modifications
+        doc.doc.saveWithVersion(temp_path, null) catch {
+            return serveError(connection, .internal_server_error, "Failed to save document");
+        };
+    }
 
     // Read file to serve
     const file = try std.fs.cwd().openFile(temp_path, .{});
@@ -711,7 +928,6 @@ fn sendPdfDownload(
 
     const file_size = try file.getEndPos();
     const pdf_data = try file.readToEndAlloc(allocator, file_size);
-    // Arena allocator cleans up automatically
 
     // Send PDF with appropriate headers
     const response_header = try std.fmt.allocPrint(
@@ -723,7 +939,6 @@ fn sendPdfDownload(
             "\r\n",
         .{ pdf_data.len, doc.filename },
     );
-    // Arena allocator cleans up automatically
 
     try connection.stream.writeAll(response_header);
     try connection.stream.writeAll(pdf_data);

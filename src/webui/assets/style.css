@@ -378,6 +378,14 @@ body {
     pointer-events: none;
 }
 
+/* Hide rotate and mirror buttons on deleted pages */
+.page-card[data-deleted="true"] .page-overlay .btn-top-left,
+.page-card[data-deleted="true"] .page-overlay .btn-top-right,
+.page-card[data-deleted="true"] .page-overlay .btn-middle-left,
+.page-card[data-deleted="true"] .page-overlay .btn-middle-right {
+    display: none !important;
+}
+
 .page-card[data-modified="true"] .page-info::after {
     content: "✏️";
     margin-left: 4px;
@@ -432,6 +440,11 @@ body[data-readonly="true"] #readonly-indicator {
 /* Document groups */
 .document-group {
     margin-bottom: 40px;
+    transition: box-shadow 0.3s ease;
+}
+
+.document-group[data-modified="true"] {
+    box-shadow: 0 0 20px 4px rgba(74, 158, 255, 0.6), 0 0 40px 8px rgba(74, 158, 255, 0.3);
 }
 
 .document-header {
