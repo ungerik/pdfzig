@@ -377,13 +377,39 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
                 try html_writer.print(
                     \\<div class="page-card" data-page-id="{d}-{d}" data-deleted="{s}" data-modified="{s}" draggable="true" onclick="openModal('/api/pages/{d}-{d}/fullsize?dpi=150')" style="position: relative; display: inline-block;">
                     \\  <img class="page-thumbnail" src="/api/pages/{d}-{d}/thumbnail?v={d}" alt="Page {d}">
-                    \\  <div class="page-overlay" style="position: absolute; inset: 0; opacity: 0; transition: opacity 0.2s; pointer-events: none;">
-                    \\    <button onclick="event.stopPropagation(); rotatePage('{d}-{d}', -90);" style="position: absolute; top: 2%; left: 2%; pointer-events: auto; background: rgba(0,0,0,0.8); color: white; border: none; border-radius: 50%; width: 15%; height: 15%; aspect-ratio: 1; cursor: pointer; font-size: 1em; display: flex; align-items: center; justify-content: center;" title="Rotate left">↺</button>
-                    \\    <button onclick="event.stopPropagation(); rotatePage('{d}-{d}', 90);" style="position: absolute; top: 2%; right: 2%; pointer-events: auto; background: rgba(0,0,0,0.8); color: white; border: none; border-radius: 50%; width: 15%; height: 15%; aspect-ratio: 1; cursor: pointer; font-size: 1em; display: flex; align-items: center; justify-content: center;" title="Rotate right">↻</button>
-                    \\    <button onclick="event.stopPropagation(); deletePage('{d}-{d}');" style="position: absolute; top: 2%; left: 50%; transform: translateX(-50%); pointer-events: auto; background: rgba(200,0,0,0.8); color: white; border: none; border-radius: 50%; width: 15%; height: 15%; aspect-ratio: 1; cursor: pointer; font-size: 1em; display: flex; align-items: center; justify-content: center;" title="Delete">🗑</button>
-                    \\    <button onclick="event.stopPropagation(); mirrorPage('{d}-{d}', 'updown');" style="position: absolute; right: 2%; top: 50%; transform: translateY(-50%); pointer-events: auto; background: rgba(0,0,0,0.8); color: white; border: none; border-radius: 50%; width: 15%; height: 15%; aspect-ratio: 1; cursor: pointer; font-size: 1em; display: flex; align-items: center; justify-content: center;" title="Mirror vertical">⇅</button>
-                    \\    <button onclick="event.stopPropagation(); mirrorPage('{d}-{d}', 'leftright');" style="position: absolute; bottom: 2%; left: 35%; transform: translateX(-50%); pointer-events: auto; background: rgba(0,0,0,0.8); color: white; border: none; border-radius: 50%; width: 15%; height: 15%; aspect-ratio: 1; cursor: pointer; font-size: 1em; display: flex; align-items: center; justify-content: center;" title="Mirror horizontal">⇄</button>
-                    \\    <button onclick="event.stopPropagation(); window.location.href='/api/pages/{d}-{d}/download';" style="position: absolute; bottom: 2%; right: 35%; transform: translateX(50%); pointer-events: auto; background: rgba(0,100,0,0.8); color: white; border: none; border-radius: 50%; width: 15%; height: 15%; aspect-ratio: 1; cursor: pointer; font-size: 1em; display: flex; align-items: center; justify-content: center;" title="Download page">💾</button>
+                    \\  <div class="page-overlay">
+                    \\    <button onclick="event.stopPropagation(); rotatePage('{d}-{d}', -90);" class="btn btn-round btn-green btn-top-left" title="Rotate left">
+                    \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 110 12h-3" />
+                    \\      </svg>
+                    \\    </button>
+                    \\    <button onclick="event.stopPropagation(); rotatePage('{d}-{d}', 90);" class="btn btn-round btn-green btn-top-right" title="Rotate right">
+                    \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 100 12h3" />
+                    \\      </svg>
+                    \\    </button>
+                    \\    <button onclick="event.stopPropagation(); mirrorPage('{d}-{d}', 'updown');" class="btn btn-pill btn-yellow btn-middle-left" title="Mirror vertical">
+                    \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l-4 4M12 3l4 4M12 3v8" />
+                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M12 21l-4-4M12 21l4-4M12 21v-8" />
+                    \\      </svg>
+                    \\    </button>
+                    \\    <button onclick="event.stopPropagation(); mirrorPage('{d}-{d}', 'leftright');" class="btn btn-pill btn-yellow btn-middle-right" title="Mirror horizontal">
+                    \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M4 12l4-4M4 12l4 4M4 12h7" />
+                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M20 12l-4-4M20 12l-4 4M20 12h-7" />
+                    \\      </svg>
+                    \\    </button>
+                    \\    <button onclick="event.stopPropagation(); deletePage('{d}-{d}');" class="btn btn-round btn-red btn-bottom-left" title="Delete">
+                    \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                    \\      </svg>
+                    \\    </button>
+                    \\    <button onclick="event.stopPropagation(); window.location.href='/api/pages/{d}-{d}/download';" class="btn btn-round btn-blue btn-bottom-right" title="Download page">
+                    \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                    \\      </svg>
+                    \\    </button>
                     \\  </div>
                     \\</div>
                 , .{
@@ -425,11 +451,19 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
                 // Add split indicator between pages (except after the last page)
                 if (page_idx < doc.pages.items.len - 1) {
                     try html_writer.print(
-                        \\<div class="split-indicator" style="display: inline-flex; align-items: center; justify-content: center; width: 30px; height: auto; margin: 0 5px; opacity: 0.3; transition: opacity 0.2s; cursor: pointer;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.3'" onclick="if(confirm('Split document after page {d}?')) {{ fetch('/api/documents/{d}/split/{d}', {{method:'POST',headers:{{'X-Client-ID':clientId}}}}).then(()=>htmx.trigger(document.body,'pageUpdate')); }}" title="Split document here">
-                        \\  <svg width="24" height="60" viewBox="0 0 24 60" style="fill: white; stroke: white; stroke-width: 1;">
-                        \\    <line x1="12" y1="0" x2="12" y2="25" stroke-dasharray="3,3"/>
-                        \\    <path d="M12 30 L8 26 L10 26 L10 22 L14 22 L14 26 L16 26 Z"/>
-                        \\    <line x1="12" y1="35" x2="12" y2="60" stroke-dasharray="3,3"/>
+                        \\<div class="split-indicator" style="display: inline-flex; flex-direction: column; align-items: center; justify-content: center; width: 30px; max-height: calc((100vh - 120px) / 5 - 40px); min-height: 200px; margin: 0 5px; opacity: 0.3; transition: opacity 0.2s; cursor: pointer;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.3'" onclick="if(confirm('Split document after page {d}?')) {{ fetch('/api/documents/{d}/split/{d}', {{method:'POST',headers:{{'X-Client-ID':clientId}}}}).then(()=>htmx.trigger(document.body,'pageUpdate')); }}" title="Split document here">
+                        \\  <svg width="30" height="100%" viewBox="0 0 30 100" preserveAspectRatio="xMidYMid meet" style="fill: none; stroke: white; stroke-width: 1.5;">
+                        \\    <line x1="15" y1="0" x2="15" y2="38" stroke-dasharray="3,3"/>
+                        \\    <g transform="translate(9, 38)">
+                        \\      <line x1="6" y1="12" x2="3" y2="6" stroke-linecap="round" stroke-linejoin="round"/>
+                        \\      <line x1="6" y1="12" x2="9" y2="6" stroke-linecap="round" stroke-linejoin="round"/>
+                        \\      <circle cx="3" cy="19" r="1.5"/>
+                        \\      <circle cx="9" cy="19" r="1.5"/>
+                        \\      <line x1="3" y1="16" x2="6" y2="12" stroke-linecap="round" stroke-linejoin="round"/>
+                        \\      <line x1="9" y1="16" x2="6" y2="12" stroke-linecap="round" stroke-linejoin="round"/>
+                        \\      <circle cx="6" cy="12" r="0.5" fill="white"/>
+                        \\    </g>
+                        \\    <line x1="15" y1="62" x2="15" y2="100" stroke-dasharray="3,3"/>
                         \\  </svg>
                         \\</div>
                     , .{ page_idx + 1, doc.id, page_idx });

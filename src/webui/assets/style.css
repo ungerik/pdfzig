@@ -126,7 +126,7 @@ body {
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     cursor: pointer;
     transition: transform 0.2s, box-shadow 0.2s;
-    overflow: hidden;
+    overflow: visible;
     min-height: 200px; /* Ensure space for loading spinner */
 }
 
@@ -193,43 +193,158 @@ body {
 .page-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(0,0,0,0.7);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
     opacity: 0;
     transition: opacity 0.2s;
-    padding: 10px;
+    pointer-events: none;
 }
 
 .page-card:hover .page-overlay {
     opacity: 1 !important;
 }
 
-/* Icon button hover effects */
-.page-overlay button:hover {
-    transform: scale(1.15);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.5);
-}
-
-.page-overlay button {
-    background: var(--bg-dark);
-    color: var(--text-primary);
-    border: 1px solid var(--text-primary);
-    padding: 6px 12px;
-    border-radius: 4px;
+/* Base button styles */
+.page-overlay .btn {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
     cursor: pointer;
-    font-size: 0.85em;
-    min-width: 120px;
-    transition: all 0.2s;
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    transition: background-color 0.2s ease, transform 0.2s ease;
+    pointer-events: auto;
 }
 
-.page-overlay button:hover {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #000;
+/* Round buttons */
+.page-overlay .btn-round {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 50%;
+}
+
+/* Pill buttons */
+.page-overlay .btn-pill {
+    width: 2rem;
+    height: 3rem;
+    border-radius: 9999px;
+}
+
+/* Color variants */
+.page-overlay .btn-green {
+    background-color: #22c55e;
+}
+.page-overlay .btn-green:hover {
+    background-color: #16a34a;
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-blue {
+    background-color: #3b82f6;
+}
+.page-overlay .btn-blue:hover {
+    background-color: #2563eb;
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-yellow {
+    background-color: #facc15;
+}
+.page-overlay .btn-yellow:hover {
+    background-color: #eab308;
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-red {
+    background-color: #ef4444;
+}
+.page-overlay .btn-red:hover {
+    background-color: #dc2626;
+    transform: scale(1.1);
+}
+
+/* Position variants */
+.page-overlay .btn-top-left {
+    top: -1rem;
+    left: -1rem;
+}
+
+.page-overlay .btn-top-center {
+    top: -1rem;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.page-overlay .btn-top-right {
+    top: -1rem;
+    right: -1rem;
+}
+
+.page-overlay .btn-middle-left {
+    top: 50%;
+    left: -1.25rem;
+    transform: translateY(-50%);
+}
+
+.page-overlay .btn-middle-right {
+    top: 50%;
+    right: -1.25rem;
+    transform: translateY(-50%);
+}
+
+.page-overlay .btn-bottom-left {
+    bottom: -1rem;
+    left: 50%;
+    transform: translateX(-130%);
+}
+
+.page-overlay .btn-bottom-right {
+    bottom: -1rem;
+    left: 50%;
+    transform: translateX(30%);
+}
+
+/* Adjust hover transforms for positioned buttons */
+.page-overlay .btn-top-left:hover {
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-top-center:hover {
+    transform: translateX(-50%) scale(1.1);
+}
+
+.page-overlay .btn-top-right:hover {
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-middle-left:hover {
+    transform: translateY(-50%) scale(1.1);
+}
+
+.page-overlay .btn-middle-right:hover {
+    transform: translateY(-50%) scale(1.1);
+}
+
+.page-overlay .btn-bottom-left:hover {
+    transform: translateX(-130%) scale(1.1);
+}
+
+.page-overlay .btn-bottom-right:hover {
+    transform: translateX(30%) scale(1.1);
+}
+
+/* Icon styles */
+.page-overlay .icon {
+    color: white;
+}
+
+.page-overlay .icon-lg {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.page-overlay .icon-md {
+    width: 1.25rem;
+    height: 1.25rem;
 }
 
 .page-card[data-deleted="true"] {
