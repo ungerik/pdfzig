@@ -157,9 +157,14 @@ body {
     backdrop-filter: blur(2px);
     z-index: 10;
     pointer-events: none;
-    display: flex;
+    display: none; /* Hidden by default */
     align-items: center;
     justify-content: center;
+}
+
+/* Show loading overlay when htmx adds .htmx-request class */
+.loading-overlay.htmx-request {
+    display: flex;
 }
 
 .loading-spinner {
