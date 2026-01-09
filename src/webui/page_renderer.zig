@@ -1,12 +1,14 @@
 //! Page rendering to PNG with caching
-//! Handles thumbnail generation and full-size page rendering
+//! Non-destructive rendering using transformation matrices
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
+const loader = @import("../pdfium/loader.zig");
 const images = @import("../pdfcontent/images.zig");
 const state_mod = @import("state.zig");
 const PageState = state_mod.PageState;
 const DocumentState = state_mod.DocumentState;
+const Matrix = state_mod.Matrix;
 const error_page = @import("error_page.zig");
 
 /// Generate an error PNG for when rendering fails
@@ -36,6 +38,7 @@ fn generateErrorPng(
 }
 
 /// Render a page thumbnail and cache the result
+/// Always renders original untransformed page - client applies CSS transforms
 /// Returns an error PNG if rendering fails
 pub fn renderThumbnail(
     allocator: std.mem.Allocator,
@@ -43,14 +46,14 @@ pub fn renderThumbnail(
     doc: *DocumentState,
     dpi: f64,
 ) ![]u8 {
-    // Check cache first
-    if (page_state.thumbnail_cache) |cache| {
+    // Check original thumbnail cache first
+    if (page_state.original_thumbnail_cache) |cache| {
         return cache;
     }
 
-    // Try to render the page, but catch errors and generate error PNG
+    // Try to render the original page, but catch errors and generate error PNG
     const png_bytes = blk: {
-        const result = renderThumbnailInternal(allocator, page_state, doc, dpi) catch |err| {
+        const result = renderOriginalThumbnail(allocator, page_state, doc, dpi) catch |err| {
             std.debug.print("Error rendering page {d}: {}\n", .{ page_state.id.page_num, err });
 
             // Generate appropriate error message
@@ -61,9 +64,17 @@ pub fn renderThumbnail(
                 else => "Error: Rendering Failed",
             };
 
-            // Use page dimensions or fallback to square
-            const width = if (page_state.width > 0) page_state.width else 600;
-            const height = if (page_state.height > 0) page_state.height else 600;
+            // Get original page dimensions for error PNG
+            var width: f64 = 600;
+            var height: f64 = 600;
+            if (doc.doc_original.loadPage(page_state.original_index)) |pg| {
+                var page = pg;
+                defer page.close();
+                width = page.getWidth();
+                height = page.getHeight();
+            } else |_| {
+                // Use fallback dimensions if page can't be loaded
+            }
 
             // Generate error PNG and break from catch to allow caching
             break :blk try generateErrorPng(allocator, error_message, width, height, dpi);
@@ -71,45 +82,39 @@ pub fn renderThumbnail(
         break :blk result;
     };
 
-    // Cache the result (whether success or error PNG)
-    page_state.thumbnail_cache = png_bytes;
-
-    // Also save to original cache if this is the first render (no modifications)
-    if (page_state.original_thumbnail_cache == null and page_state.modifications.isEmpty()) {
-        // Duplicate the bytes for the original cache
-        const original_copy = try allocator.dupe(u8, png_bytes);
-        page_state.original_thumbnail_cache = original_copy;
-    }
+    // Cache the original thumbnail
+    page_state.original_thumbnail_cache = png_bytes;
 
     return png_bytes;
 }
 
-/// Internal rendering function that can fail
-fn renderThumbnailInternal(
+/// Render original page without transformations (client applies CSS transforms)
+fn renderOriginalThumbnail(
     allocator: std.mem.Allocator,
     page_state: *PageState,
     doc: *DocumentState,
     dpi: f64,
 ) ![]u8 {
-    // Load the page
-    var page = try doc.doc.loadPage(page_state.original_index);
+    // Load original page (unmodified)
+    var page = try doc.doc_original.loadPage(page_state.original_index);
     defer page.close();
 
-    // Calculate dimensions at target DPI
+    // Get original page dimensions
     const width_points = page.getWidth();
     const height_points = page.getHeight();
 
+    // Calculate pixel dimensions at target DPI
     const width_px: u32 = @intFromFloat(@ceil(width_points * dpi / 72.0));
     const height_px: u32 = @intFromFloat(@ceil(height_points * dpi / 72.0));
 
-    // Create bitmap
+    // Create bitmap with original dimensions
     var bitmap = try pdfium.Bitmap.create(width_px, height_px, .bgra);
     defer bitmap.destroy();
 
     // Fill with white background
     bitmap.fillWhite();
 
-    // Render the page
+    // Render page with standard rendering (no transformations)
     page.render(&bitmap, .{});
 
     // Convert to PNG bytes
@@ -228,8 +233,12 @@ fn convertBitmapToPng(
     return png_bytes;
 }
 
-/// Invalidate thumbnail cache for a page
+/// Invalidate thumbnail cache for a page (used when DPI changes)
 pub fn invalidateThumbnailCache(page_state: *PageState, allocator: std.mem.Allocator) void {
+    if (page_state.original_thumbnail_cache) |cache| {
+        allocator.free(cache);
+        page_state.original_thumbnail_cache = null;
+    }
     if (page_state.thumbnail_cache) |cache| {
         allocator.free(cache);
         page_state.thumbnail_cache = null;

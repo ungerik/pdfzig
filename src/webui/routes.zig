@@ -4,6 +4,8 @@ const std = @import("std");
 const state_mod = @import("state.zig");
 const GlobalState = state_mod.GlobalState;
 const PageId = state_mod.PageId;
+const PageState = state_mod.PageState;
+const Matrix = state_mod.Matrix;
 const assets = @import("assets.zig");
 const page_renderer = @import("page_renderer.zig");
 const operations = @import("operations.zig");
@@ -16,6 +18,8 @@ pub fn dispatch(
     method: []const u8,
     target: []const u8,
     readonly: bool,
+    session_id: ?[]const u8,
+    body: []const u8,
 ) !void {
     const is_post = std.mem.eql(u8, method, "POST");
 
@@ -51,6 +55,13 @@ pub fn dispatch(
         return serveDocumentStatus(global_state, connection);
     } else if (std.mem.eql(u8, target, "/api/pages/list")) {
         return servePageList(global_state, connection);
+    } else if (std.mem.eql(u8, target, "/api/pages/list-json")) {
+        return servePageListJSON(global_state, connection);
+    } else if (std.mem.eql(u8, target, "/api/heartbeat")) {
+        if (!is_post) return serveMethodNotAllowed(connection);
+        return handleHeartbeat(global_state, connection, session_id);
+    } else if (std.mem.eql(u8, target, "/api/session/check")) {
+        return handleSessionCheck(global_state, connection, session_id);
     } else if (std.mem.eql(u8, target, "/api/reset")) {
         if (!is_post) return serveMethodNotAllowed(connection);
         if (readonly) return serveForbidden(connection);
@@ -144,6 +155,11 @@ pub fn dispatch(
             if (!is_post) return serveMethodNotAllowed(connection);
             if (readonly) return serveForbidden(connection);
             return handleDelete(global_state, connection, page_id);
+        } else if (std.mem.eql(u8, action, "operation")) {
+            // New JSON API for client-side transformations
+            if (!is_post) return serveMethodNotAllowed(connection);
+            if (readonly) return serveForbidden(connection);
+            return handleOperationJSON(global_state, connection, page_id, body);
         } else if (std.mem.eql(u8, action, "revert")) {
             if (!is_post) return serveMethodNotAllowed(connection);
             if (readonly) return serveForbidden(connection);
@@ -229,6 +245,22 @@ fn serveJS(connection: std.net.Server.Connection, js: []const u8) !void {
     return serveStaticFile(connection, js, "application/javascript");
 }
 
+/// Serve JSON response
+fn serveJSON(connection: std.net.Server.Connection, json: []const u8) !void {
+    var buffer: [512]u8 = undefined;
+    const response = try std.fmt.bufPrint(&buffer,
+        \\HTTP/1.1 200 OK
+        \\Content-Type: application/json
+        \\Content-Length: {d}
+        \\Connection: close
+        \\
+        \\
+    , .{json.len});
+
+    _ = try connection.stream.write(response);
+    _ = try connection.stream.write(json);
+}
+
 /// Serve 404 Not Found
 fn serve404(connection: std.net.Server.Connection) !void {
     const html = "<html><body><h1>404 Not Found</h1></body></html>";
@@ -248,9 +280,12 @@ fn serve404(connection: std.net.Server.Connection) !void {
 
 /// Serve 501 Not Implemented for API endpoints
 fn serveNotImplemented(connection: std.net.Server.Connection, endpoint: []const u8) !void {
-    _ = endpoint;
-
-    const html = "<html><body><h1>501 Not Implemented</h1><p>This API endpoint is not yet implemented.</p></body></html>";
+    var buffer_html: [1024]u8 = undefined;
+    const html = try std.fmt.bufPrint(
+        &buffer_html,
+        "<html><body><h1>501 Not Implemented</h1><p>This API endpoint is not yet implemented: {s}</p></body></html>",
+        .{endpoint},
+    );
 
     var buffer: [512]u8 = undefined;
     const response =
@@ -337,7 +372,40 @@ fn serveDocumentStatus(global_state: *GlobalState, connection: std.net.Server.Co
     try serveJson(connection, json_str);
 }
 
-/// Serve HTML fragment with all pages
+/// Response structure for page version state
+const PageVersionStateJSON = struct {
+    version: u32,
+    operation: []const u8,
+    matrix: [6]f64,
+    width: f64,
+    height: f64,
+    deleted: bool,
+};
+
+/// Response structure for page info
+const PageInfoJSON = struct {
+    id: []const u8,
+    original_index: u32,
+    thumbnail_url: []const u8,
+    version_history: []PageVersionStateJSON,
+    current_version: u32,
+};
+
+/// Response structure for document info
+const DocumentInfoJSON = struct {
+    id: u32,
+    filename: []const u8,
+    color: [3]u8,
+    modified: bool,
+    pages: []PageInfoJSON,
+};
+
+/// Response structure for page list
+const PageListResponse = struct {
+    documents: []DocumentInfoJSON,
+};
+
+/// Serve HTML with all page cards for initial page load
 fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connection) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -346,6 +414,9 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
     // Build HTML response
     var html = std.array_list.Managed(u8).init(allocator);
     var html_writer = html.writer();
+
+    global_state.lock();
+    defer global_state.unlock();
 
     // Check if we have any documents
     if (global_state.documents.items.len == 0) {
@@ -386,89 +457,8 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
             , .{ doc.id, doc.filename, doc.id, doc_modified_attr, doc.filename, color[0], color[1], color[2] });
 
             // Render each page
-            for (doc.pages.items, 0..) |page, page_idx| {
-                const page_id = page.id;
-                const deleted_attr = if (page.modifications.deleted) "true" else "false";
-                const modified_attr = if (!page.modifications.isEmpty()) "true" else "false";
-
-                // Build modification description for tooltip
-                const mod_desc = try page.modifications.describe(allocator);
-                defer allocator.free(mod_desc);
-
-                try html_writer.print(
-                    \\<div class="page-card" data-page-id="{d}-{d}" data-deleted="{s}" data-modified="{s}" draggable="true" onclick="openModal('/api/pages/{d}-{d}/fullsize?dpi=150')" style="position: relative; display: inline-block;">
-                    \\  <img class="page-thumbnail" src="/api/pages/{d}-{d}/thumbnail?v={d}" alt="Page {d}">
-                    \\  <div class="page-overlay">
-                    \\    <button onclick="event.stopPropagation(); rotatePage('{d}-{d}', -90);" class="btn btn-round btn-green btn-top-left" title="Rotate left">
-                    \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 110 12h-3" />
-                    \\      </svg>
-                    \\    </button>
-                    \\    <button onclick="event.stopPropagation(); rotatePage('{d}-{d}', 90);" class="btn btn-round btn-green btn-top-right" title="Rotate right">
-                    \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 100 12h3" />
-                    \\      </svg>
-                    \\    </button>
-                    \\    <button onclick="event.stopPropagation(); mirrorPage('{d}-{d}', 'updown');" class="btn btn-pill btn-yellow btn-middle-left" title="Mirror vertical">
-                    \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l-4 4M12 3l4 4M12 3v8" />
-                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M12 21l-4-4M12 21l4-4M12 21v-8" />
-                    \\      </svg>
-                    \\    </button>
-                    \\    <button onclick="event.stopPropagation(); mirrorPage('{d}-{d}', 'leftright');" class="btn btn-pill btn-yellow btn-middle-right" title="Mirror horizontal">
-                    \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M4 12l4-4M4 12l4 4M4 12h7" />
-                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M20 12l-4-4M20 12l-4 4M20 12h-7" />
-                    \\      </svg>
-                    \\    </button>
-                    \\    <button onclick="event.stopPropagation(); deletePage('{d}-{d}');" class="btn btn-round btn-red btn-bottom-left" title="Delete">
-                    \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                    \\      </svg>
-                    \\    </button>
-                    \\    <button onclick="event.stopPropagation(); downloadPageOrDocument('{d}-{d}', {d});" class="btn btn-round btn-blue btn-bottom-right" title="Download">
-                    \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                    \\        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                    \\      </svg>
-                    \\    </button>
-                    \\  </div>
-                    \\</div>
-                , .{
-                    page_id.doc_id,
-                    page_id.page_num,
-                    deleted_attr,
-                    modified_attr,
-                    page_id.doc_id,
-                    page_id.page_num,
-                    page_id.doc_id,
-                    page_id.page_num,
-                    page.version,
-                    page.original_index + 1,
-                    page_id.doc_id,
-                    page_id.page_num,
-                    page_id.doc_id,
-                    page_id.page_num,
-                    page_id.doc_id,
-                    page_id.page_num,
-                    page_id.doc_id,
-                    page_id.page_num,
-                    page_id.doc_id,
-                    page_id.page_num,
-                    page_id.doc_id,
-                    page_id.page_num,
-                    page_id.doc_id,
-                });
-
-                // Add revert button if page is modified (and not deleted)
-                if (!page.modifications.isEmpty() and !page.modifications.deleted) {
-                    try html_writer.print(
-                        \\<button class="revert-btn" onclick="event.stopPropagation(); revertPage('{d}-{d}');" style="position: absolute; bottom: 8px; right: 8px; pointer-events: auto; background: rgba(255,165,0,0.9); color: white; border: none; border-radius: 4px; padding: 6px 10px; cursor: pointer; font-size: 0.85em; z-index: 10;" title="Revert: {s}">↶ Revert</button>
-                    , .{
-                        page_id.doc_id,
-                        page_id.page_num,
-                        mod_desc,
-                    });
-                }
+            for (doc.pages.items, 0..) |*page, page_idx| {
+                try renderPageCardHTML(html_writer, page, allocator);
 
                 // Add split indicator between pages (except after the last page)
                 if (page_idx < doc.pages.items.len - 1) {
@@ -520,6 +510,80 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
     const response_str = try std.fmt.bufPrint(&buffer, response, .{html_str.len});
     _ = try connection.stream.write(response_str);
     _ = try connection.stream.write(html_str);
+}
+
+/// Serve JSON with all pages and version history (for JavaScript)
+fn servePageListJSON(global_state: *GlobalState, connection: std.net.Server.Connection) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    global_state.lock();
+    defer global_state.unlock();
+
+    // Build documents array
+    var documents = std.array_list.Managed(DocumentInfoJSON).init(allocator);
+
+    for (global_state.documents.items) |doc| {
+        // Build pages array for this document
+        var pages = std.array_list.Managed(PageInfoJSON).init(allocator);
+
+        for (doc.pages.items) |page_state| {
+            // Build version history array for this page
+            var version_history = std.array_list.Managed(PageVersionStateJSON).init(allocator);
+
+            for (page_state.modifications.history.items) |version_state| {
+                const version_json = PageVersionStateJSON{
+                    .version = version_state.version,
+                    .operation = version_state.operation,
+                    .matrix = [6]f64{
+                        version_state.matrix.a,
+                        version_state.matrix.b,
+                        version_state.matrix.c,
+                        version_state.matrix.d,
+                        version_state.matrix.e,
+                        version_state.matrix.f,
+                    },
+                    .width = version_state.width,
+                    .height = version_state.height,
+                    .deleted = version_state.deleted,
+                };
+                try version_history.append(version_json);
+            }
+
+            // Create page info
+            const page_id_str = try std.fmt.allocPrint(allocator, "{d}-{d}", .{ page_state.id.doc_id, page_state.id.page_num });
+            const thumbnail_url = try std.fmt.allocPrint(allocator, "/api/pages/{s}/thumbnail", .{page_id_str});
+
+            const page_info = PageInfoJSON{
+                .id = page_id_str,
+                .original_index = page_state.original_index,
+                .thumbnail_url = thumbnail_url,
+                .version_history = version_history.items,
+                .current_version = page_state.modifications.current_version,
+            };
+            try pages.append(page_info);
+        }
+
+        // Create document info
+        const doc_info = DocumentInfoJSON{
+            .id = doc.id,
+            .filename = doc.filename,
+            .color = doc.color,
+            .modified = doc.modified,
+            .pages = pages.items,
+        };
+        try documents.append(doc_info);
+    }
+
+    // Create response
+    const response = PageListResponse{
+        .documents = documents.items,
+    };
+
+    // Serialize to JSON
+    const json = try stringifyJson(response, allocator);
+    try serveJSON(connection, json);
 }
 
 /// Serve PNG thumbnail for a page
@@ -600,48 +664,281 @@ fn parseJsonBody(comptime T: type, body: []const u8, allocator: std.mem.Allocato
     return std.json.parseFromSlice(T, allocator, body, .{});
 }
 
-/// Handle rotate page request
+/// Serialize value to JSON string
+fn stringifyJson(value: anytype, allocator: std.mem.Allocator) ![]u8 {
+    var json_list = std.array_list.Managed(u8).init(allocator);
+    try std.fmt.format(json_list.writer(), "{f}", .{std.json.fmt(value, .{})});
+    return json_list.toOwnedSlice();
+}
+
+/// Helper to render page card HTML after a page operation
+fn handlePageOperationAndRender(
+    global_state: *GlobalState,
+    connection: std.net.Server.Connection,
+    page_id: PageId,
+) !void {
+    // Get updated page state (operation already completed and released lock)
+    global_state.lock();
+    defer global_state.unlock();
+
+    const doc = global_state.getDocument(page_id.doc_id) orelse {
+        return serveError(connection, .not_found, "Document not found");
+    };
+
+    if (page_id.page_num >= doc.pages.items.len) {
+        return serveError(connection, .not_found, "Page not found");
+    }
+
+    const page = doc.pages.items[page_id.page_num];
+
+    // Render updated page card HTML
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var html_buffer = std.array_list.Managed(u8).init(allocator);
+    const writer = html_buffer.writer();
+
+    try renderPageCardHTML(writer, &page, allocator);
+
+    try serveHTML(connection, html_buffer.items, false);
+}
+
+/// Render a single page card HTML
+fn renderPageCardHTML(writer: anytype, page: *const PageState, allocator: std.mem.Allocator) !void {
+    const page_id = page.id;
+    const current_state = page.modifications.getCurrentStateConst();
+    const deleted_attr = if (current_state.deleted) "true" else "false";
+    const modified_attr = if (!page.modifications.isEmpty()) "true" else "false";
+
+    // Build strings once to avoid repeating arguments
+    const page_id_str = try std.fmt.allocPrint(allocator, "{d}-{d}", .{ page_id.doc_id, page_id.page_num });
+    defer allocator.free(page_id_str);
+
+    // Build modification description for tooltip
+    const mod_desc = try page.modifications.describe(allocator);
+    defer allocator.free(mod_desc);
+
+    try writer.print(
+        \\<div class="page-card-outer no-transition" data-page-id="{s}" data-deleted="{s}" data-modified="{s}" draggable="true" style="position: relative; display: inline-block;">
+        \\  <div class="page-card-inner no-transition" onclick="openModal('/api/pages/{s}/fullsize?dpi=150')" style="position: relative;">
+        \\    <img class="page-thumbnail" src="/api/pages/{s}/thumbnail?v={d}" alt="Page {d}">
+        \\  </div>
+        \\  <div class="page-overlay">
+        \\    <button onclick="event.stopPropagation(); rotatePage('{s}', -90);" class="btn btn-round btn-green btn-top-left" title="Rotate left">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 110 12h-3" />
+        \\      </svg>
+        \\    </button>
+        \\    <button onclick="event.stopPropagation(); rotatePage('{s}', 90);" class="btn btn-round btn-green btn-top-right" title="Rotate right">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 100 12h3" />
+        \\      </svg>
+        \\    </button>
+        \\    <button onclick="event.stopPropagation(); openModal('/api/pages/{s}/fullsize?dpi=150');" class="btn btn-round" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(107, 114, 128, 0.8);" title="Zoom / Preview">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607zM10.5 7.5v6m3-3h-6" />
+        \\      </svg>
+        \\    </button>
+        \\    <button onclick="event.stopPropagation(); mirrorPage('{s}', 'updown');" class="btn btn-pill btn-yellow btn-middle-left" title="Mirror vertical">
+        \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l-4 4M12 3l4 4M12 3v8" />
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M12 21l-4-4M12 21l-4-4M12 21v-8" />
+        \\      </svg>
+        \\    </button>
+        \\    <button onclick="event.stopPropagation(); mirrorPage('{s}', 'leftright');" class="btn btn-pill btn-yellow btn-middle-right" title="Mirror horizontal">
+        \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M4 12l4-4M4 12l4 4M4 12h7" />
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M20 12l-4-4M20 12l-4 4M20 12h-7" />
+        \\      </svg>
+        \\    </button>
+        \\    <button onclick="event.stopPropagation(); deletePage('{s}');" class="btn btn-round btn-red btn-bottom-left" title="Delete">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+        \\      </svg>
+        \\    </button>
+        \\    <button onclick="event.stopPropagation(); downloadPageOrDocument('{s}', {d});" class="btn btn-round btn-blue btn-bottom-right" title="Download">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+        \\      </svg>
+        \\    </button>
+        \\  </div>
+        \\</div>
+    , .{
+        page_id_str,
+        deleted_attr,
+        modified_attr,
+        page_id_str,
+        page_id_str,
+        page.modifications.current_version,
+        page.original_index + 1,
+        page_id_str,
+        page_id_str,
+        page_id_str,
+        page_id_str,
+        page_id_str,
+        page_id_str,
+        page_id_str,
+        page_id.doc_id,
+    });
+
+    // Add revert button if page is modified (and not deleted)
+    if (!page.modifications.isEmpty() and !current_state.deleted) {
+        try writer.print(
+            \\<button class="revert-btn" onclick="event.stopPropagation(); revertPage('{s}');" style="position: absolute; bottom: 8px; right: 8px; pointer-events: auto; background: rgba(255,165,0,0.9); color: white; border: none; border-radius: 4px; padding: 6px 10px; cursor: pointer; font-size: 0.85em; z-index: 10;" title="Revert: {s}">↶ Revert</button>
+        , .{
+            page_id_str,
+            mod_desc,
+        });
+    }
+}
+
+/// Handle rotate page request - returns updated page card HTML
 fn handleRotate(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, degrees: i32) !void {
-    // Perform rotation
-    operations.rotatePage(global_state, page_id.doc_id, page_id.page_num, degrees) catch {
+    // Create operation description
+    const operation_desc = if (degrees > 0)
+        "rotate CW"
+    else if (degrees < 0)
+        "rotate CCW"
+    else
+        "rotate 180°";
+
+    operations.rotatePage(global_state, page_id.doc_id, page_id.page_num, degrees, operation_desc) catch {
         return serveError(connection, .internal_server_error, "Rotation failed");
     };
-
-    // Send success response
-    try serveJson(connection, "{\"success\":true}");
+    try handlePageOperationAndRender(global_state, connection, page_id);
 }
 
-/// Handle mirror page request
+/// Handle mirror page request - returns updated page card HTML
 fn handleMirror(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, direction: operations.MirrorDirection) !void {
-    // Perform mirror
-    operations.mirrorPage(global_state, page_id.doc_id, page_id.page_num, direction) catch {
-        return serveError(connection, .internal_server_error, "Mirror failed");
+    const operation_desc = switch (direction) {
+        .updown => "mirror vertical",
+        .leftright => "mirror horizontal",
     };
 
-    // Send success response
-    try serveJson(connection, "{\"success\":true}");
+    operations.mirrorPage(global_state, page_id.doc_id, page_id.page_num, direction, operation_desc) catch {
+        return serveError(connection, .internal_server_error, "Mirror failed");
+    };
+    try handlePageOperationAndRender(global_state, connection, page_id);
 }
 
-/// Handle delete page request
+/// Handle delete page request - returns updated page card HTML
 fn handleDelete(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId) !void {
-    // Perform delete (toggle)
     operations.deletePage(global_state, page_id.doc_id, page_id.page_num) catch {
         return serveError(connection, .internal_server_error, "Delete failed");
     };
-
-    // Send success response
-    try serveJson(connection, "{\"success\":true}");
+    try handlePageOperationAndRender(global_state, connection, page_id);
 }
 
-/// Handle revert page request
+/// Handle revert page request - returns updated page card HTML
 fn handleRevert(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId) !void {
-    // Perform revert
     operations.revertPage(global_state, page_id.doc_id, page_id.page_num) catch {
         return serveError(connection, .internal_server_error, "Revert failed");
     };
+    try handlePageOperationAndRender(global_state, connection, page_id);
+}
 
-    // Send success response
-    try serveJson(connection, "{\"success\":true}");
+/// Request structure for POST /api/pages/{id}/operation
+const OperationRequest = struct {
+    type: []const u8, // "rotate", "mirror", "delete"
+    degrees: ?i32 = null, // For rotate
+    direction: ?[]const u8 = null, // For mirror: "updown" or "leftright"
+    expected_version: u32,
+    new_state: struct {
+        version: u32,
+        operation: []const u8,
+        matrix: [6]f64,
+        width: f64,
+        height: f64,
+        deleted: bool,
+    },
+};
+
+/// Response structure for operations
+const OperationResponse = struct {
+    success: bool,
+    version: u32,
+    document_modified: bool,
+};
+
+/// Handle operation request (new JSON API for client-side transformations)
+fn handleOperationJSON(
+    global_state: *GlobalState,
+    connection: std.net.Server.Connection,
+    page_id: PageId,
+    body: []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Parse JSON request
+    const parsed = parseJsonBody(OperationRequest, body, allocator) catch {
+        return serveError(connection, .bad_request, "Invalid JSON");
+    };
+    defer parsed.deinit();
+    const req = parsed.value;
+
+    global_state.lock();
+    defer global_state.unlock();
+
+    const doc = global_state.getDocument(page_id.doc_id) orelse {
+        return serveError(connection, .not_found, "Document not found");
+    };
+
+    if (page_id.page_num >= doc.pages.items.len) {
+        return serveError(connection, .not_found, "Page not found");
+    }
+
+    const page_state = &doc.pages.items[page_id.page_num];
+
+    // Validate expected version matches current version
+    if (page_state.modifications.current_version != req.expected_version) {
+        return serveError(connection, .conflict, "Version mismatch - page was modified");
+    }
+
+    // Convert matrix array to Matrix struct
+    const matrix = Matrix{
+        .a = req.new_state.matrix[0],
+        .b = req.new_state.matrix[1],
+        .c = req.new_state.matrix[2],
+        .d = req.new_state.matrix[3],
+        .e = req.new_state.matrix[4],
+        .f = req.new_state.matrix[5],
+    };
+
+    // Add new version to history
+    page_state.modifications.addVersion(
+        req.new_state.operation,
+        matrix,
+        req.new_state.width,
+        req.new_state.height,
+        req.new_state.deleted,
+    ) catch {
+        return serveError(connection, .internal_server_error, "Failed to add version");
+    };
+
+    // Check document modification status
+    var has_modifications = false;
+    for (doc.pages.items) |page| {
+        if (!page.modifications.isEmpty()) {
+            has_modifications = true;
+            break;
+        }
+    }
+    doc.modified = has_modifications;
+
+    global_state.notifyChange();
+
+    // Return JSON response
+    const response = OperationResponse{
+        .success = true,
+        .version = page_state.modifications.current_version,
+        .document_modified = doc.modified,
+    };
+
+    const json = try stringifyJson(response, allocator);
+    try serveJSON(connection, json);
 }
 
 /// Handle page download request (download single page as PDF)
@@ -673,51 +970,73 @@ fn handlePageDownload(global_state: *GlobalState, connection: std.net.Server.Con
     };
     defer new_doc.close();
 
-    // Import the single page (use original_index as that's the index in the PDFium document)
+    // Import the single page from ORIGINAL document (unmodified)
     const page_indices = [_]c_int{@intCast(page_state.original_index)};
-    if (!new_doc.importPages(&doc.doc, &page_indices, 0)) {
+    if (!new_doc.importPages(&doc.doc_original, &page_indices, 0)) {
         return serveError(connection, .internal_server_error, "Failed to import page");
     }
 
-    // Apply modifications if any (ignore deleted flag - just apply rotation/mirror)
-    const has_visual_modifications = page_state.modifications.rotation != 0 or
-        page_state.modifications.mirror_ud or
-        page_state.modifications.mirror_lr;
-
-    if (has_visual_modifications) {
+    // Check if we need to bake transformations
+    if (page_state.modifications.needsTransformation()) {
         // Load the newly imported page (it's at index 0 in the new document)
         var page = new_doc.loadPage(0) catch {
             return serveError(connection, .internal_server_error, "Failed to load imported page");
         };
         defer page.close();
 
-        // Apply rotation
-        if (page_state.modifications.rotation != 0) {
-            if (!page.rotate(@intCast(page_state.modifications.rotation))) {
-                return serveError(connection, .internal_server_error, "Failed to apply rotation");
-            }
-        }
+        // Get original dimensions
+        var orig_page = try doc.doc_original.loadPage(page_state.original_index);
+        defer orig_page.close();
+        const orig_width = orig_page.getWidth();
+        const orig_height = orig_page.getHeight();
 
-        // Apply mirrors
-        const page_width = page.getWidth();
-        const page_height = page.getHeight();
+        // Get the cumulative transformation matrix from current state
+        const current_state = page_state.modifications.getCurrentState();
+        const m = current_state.matrix;
+
+        // Apply matrix to all page objects
         const object_count = page.getObjectCount();
-
-        if (page_state.modifications.mirror_ud or page_state.modifications.mirror_lr) {
-            var i: u32 = 0;
-            while (i < object_count) : (i += 1) {
-                if (page.getObject(i)) |obj| {
-                    if (page_state.modifications.mirror_ud) {
-                        obj.transform(1, 0, 0, -1, 0, page_height);
-                    }
-                    if (page_state.modifications.mirror_lr) {
-                        obj.transform(-1, 0, 0, 1, page_width, 0);
-                    }
-                }
+        var i: u32 = 0;
+        while (i < object_count) : (i += 1) {
+            if (page.getObject(i)) |obj| {
+                obj.transform(m.a, m.b, m.c, m.d, m.e, m.f);
             }
         }
 
-        // Generate content to apply transformations
+        // Update MediaBox only if dimensions changed (rotations)
+        // Mirrors don't change dimensions, only 90°/270° rotations do
+        const dims_changed = @abs(current_state.width - orig_width) > 0.1 or
+            @abs(current_state.height - orig_height) > 0.1;
+
+        if (dims_changed) {
+            // Update MediaBox
+            if (!page.setMediaBox(
+                0,
+                0,
+                current_state.width,
+                current_state.height,
+            )) {
+                return serveError(connection, .internal_server_error, "Failed to set MediaBox");
+            }
+
+            // Update CropBox if it exists
+            if (page.getCropBox()) |_| {
+                // Page has CropBox defined - update it to match new dimensions
+                page.setCropBox(
+                    0,
+                    0,
+                    current_state.width,
+                    current_state.height,
+                );
+            }
+        }
+
+        // Reset rotation to 0 (transformations are baked into objects)
+        if (!page.setRotation(.none)) {
+            return serveError(connection, .internal_server_error, "Failed to reset rotation");
+        }
+
+        // Generate content to commit transformations
         if (!page.generateContent()) {
             return serveError(connection, .internal_server_error, "Failed to generate content");
         }
@@ -741,6 +1060,7 @@ fn handlePageDownload(global_state: *GlobalState, connection: std.net.Server.Con
 
     const file_size = try file.getEndPos();
     const pdf_data = try file.readToEndAlloc(allocator, file_size);
+    defer allocator.free(pdf_data);
 
     // Generate filename - strip .pdf extension if present
     const base_name = if (std.mem.endsWith(u8, doc.filename, ".pdf"))
@@ -753,6 +1073,7 @@ fn handlePageDownload(global_state: *GlobalState, connection: std.net.Server.Con
         "{s}_page_{d}.pdf",
         .{ base_name, page_state.original_index + 1 },
     );
+    defer allocator.free(filename);
 
     // Send PDF with appropriate headers
     const response_header = try std.fmt.allocPrint(
@@ -764,6 +1085,7 @@ fn handlePageDownload(global_state: *GlobalState, connection: std.net.Server.Con
             "\r\n",
         .{ pdf_data.len, filename },
     );
+    defer allocator.free(response_header);
 
     try connection.stream.writeAll(response_header);
     try connection.stream.writeAll(pdf_data);
@@ -788,6 +1110,26 @@ fn handleUpdateDPI(global_state: *GlobalState, connection: std.net.Server.Connec
     };
 
     // Send success response
+    try serveJson(connection, "{\"success\":true}");
+}
+
+/// Handle heartbeat request (session ID logged for debugging only)
+fn handleHeartbeat(_: *GlobalState, connection: std.net.Server.Connection, session_id: ?[]const u8) !void {
+    // Just log the session ID for debugging/tracking
+    if (session_id) |sid| {
+        std.debug.print("Heartbeat from session: {s}\n", .{sid});
+    }
+
+    try serveJson(connection, "{\"success\":true}");
+}
+
+/// Handle session check request (always returns success, no locking)
+fn handleSessionCheck(_: *GlobalState, connection: std.net.Server.Connection, session_id: ?[]const u8) !void {
+    // Just log the session ID for debugging/tracking
+    if (session_id) |sid| {
+        std.debug.print("Session check from: {s}\n", .{sid});
+    }
+
     try serveJson(connection, "{\"success\":true}");
 }
 
@@ -877,15 +1219,6 @@ fn sendPdfDownload(
     doc: *state_mod.DocumentState,
     allocator: std.mem.Allocator,
 ) !void {
-    // Check if any pages are deleted
-    var has_deleted_pages = false;
-    for (doc.pages.items) |page| {
-        if (page.modifications.deleted) {
-            has_deleted_pages = true;
-            break;
-        }
-    }
-
     const temp_path = try std.fmt.allocPrint(
         allocator,
         "/tmp/pdfzig-download-{d}.pdf",
@@ -893,34 +1226,102 @@ fn sendPdfDownload(
     );
     defer std.fs.cwd().deleteFile(temp_path) catch {};
 
-    if (has_deleted_pages) {
-        // Create new document with only non-deleted pages
-        var new_doc = pdfium.Document.createNew() catch {
-            return serveError(connection, .internal_server_error, "Failed to create document");
-        };
-        defer new_doc.close();
+    // Always create new document and bake transformations
+    var new_doc = pdfium.Document.createNew() catch {
+        return serveError(connection, .internal_server_error, "Failed to create document");
+    };
+    defer new_doc.close();
 
-        // Import non-deleted pages
-        for (doc.pages.items) |page| {
-            if (!page.modifications.deleted) {
-                // Import this page
-                const page_indices = [_]c_int{@intCast(page.original_index)};
-                if (!new_doc.importPages(&doc.doc, &page_indices, 0xFFFFFFFF)) { // append to end
-                    return serveError(connection, .internal_server_error, "Failed to import page");
+    // Import pages from original document, baking transformations
+    var page_num: u32 = 0;
+    for (doc.pages.items) |page_state| {
+        const current_state = page_state.modifications.getCurrentState();
+
+        // Skip deleted pages
+        if (current_state.deleted) {
+            continue;
+        }
+
+        // Import page from ORIGINAL document (unmodified)
+        const page_indices = [_]c_int{@intCast(page_state.original_index)};
+        if (!new_doc.importPages(&doc.doc_original, &page_indices, 0xFFFFFFFF)) {
+            return serveError(connection, .internal_server_error, "Failed to import page");
+        }
+
+        // Check if we need to bake transformations
+        if (page_state.modifications.needsTransformation()) {
+            // Load the newly imported page (it's at the current page_num)
+            var page = new_doc.loadPage(page_num) catch {
+                return serveError(connection, .internal_server_error, "Failed to load imported page");
+            };
+            defer page.close();
+
+            // Get original dimensions from doc_original
+            var orig_page = doc.doc_original.loadPage(page_state.original_index) catch {
+                return serveError(connection, .internal_server_error, "Failed to load original page");
+            };
+            defer orig_page.close();
+            const orig_width = orig_page.getWidth();
+            const orig_height = orig_page.getHeight();
+
+            // Get the cumulative transformation matrix from current state
+            const m = current_state.matrix;
+
+            // Apply matrix to all page objects
+            const object_count = page.getObjectCount();
+            var i: u32 = 0;
+            while (i < object_count) : (i += 1) {
+                if (page.getObject(i)) |obj| {
+                    obj.transform(m.a, m.b, m.c, m.d, m.e, m.f);
                 }
+            }
+
+            // Update MediaBox only if dimensions changed (rotations swap dimensions)
+            // Mirrors don't change dimensions
+            const dims_changed = @abs(current_state.width - orig_width) > 0.1 or
+                @abs(current_state.height - orig_height) > 0.1;
+
+            if (dims_changed) {
+                // Update MediaBox
+                if (!page.setMediaBox(
+                    0,
+                    0,
+                    current_state.width,
+                    current_state.height,
+                )) {
+                    return serveError(connection, .internal_server_error, "Failed to set MediaBox");
+                }
+
+                // Update CropBox if it exists
+                if (page.getCropBox()) |_| {
+                    // Page has CropBox defined - update it to match new dimensions
+                    page.setCropBox(
+                        0,
+                        0,
+                        current_state.width,
+                        current_state.height,
+                    );
+                }
+            }
+
+            // Reset rotation to 0 (transformations are baked into objects)
+            if (!page.setRotation(.none)) {
+                return serveError(connection, .internal_server_error, "Failed to reset rotation");
+            }
+
+            // Generate content to commit transformations
+            if (!page.generateContent()) {
+                return serveError(connection, .internal_server_error, "Failed to generate content");
             }
         }
 
-        // Save the new document
-        new_doc.saveWithVersion(temp_path, null) catch {
-            return serveError(connection, .internal_server_error, "Failed to save document");
-        };
-    } else {
-        // No deleted pages, save document as-is with modifications
-        doc.doc.saveWithVersion(temp_path, null) catch {
-            return serveError(connection, .internal_server_error, "Failed to save document");
-        };
+        page_num += 1;
     }
+
+    // Save the new document
+    new_doc.saveWithVersion(temp_path, null) catch {
+        return serveError(connection, .internal_server_error, "Failed to save document");
+    };
 
     // Read file to serve
     const file = try std.fs.cwd().openFile(temp_path, .{});
@@ -994,7 +1395,18 @@ fn handleDeleteAllPages(global_state: *GlobalState, connection: std.net.Server.C
 
     // Mark all pages as deleted
     for (doc.pages.items) |*page| {
-        page.modifications.deleted = true;
+        const current_state = page.modifications.getCurrentState();
+        if (!current_state.deleted) {
+            page.modifications.addVersion(
+                "delete",
+                current_state.matrix,
+                current_state.width,
+                current_state.height,
+                true,
+            ) catch {
+                return serveError(connection, .internal_server_error, "Failed to mark page as deleted");
+            };
+        }
     }
 
     doc.modified = true;

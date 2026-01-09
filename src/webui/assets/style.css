@@ -119,24 +119,39 @@ body {
     align-items: flex-start;
 }
 
-.page-card {
+/* Outer container - not transformed, adjusts size to fit rotated content */
+.page-card-outer {
     position: relative;
+    display: inline-block;
+    transition: width 0.3s ease-in-out, height 0.3s ease-in-out;
+}
+
+.page-card-outer[draggable="true"] {
+    cursor: move;
+}
+
+/* Inner container - gets transformed (rotated/mirrored) */
+.page-card-inner {
     background: white;
     border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
-    overflow: visible;
-    min-height: 200px; /* Ensure space for loading spinner */
+    transition: transform 0.3s ease-in-out, box-shadow 0.2s;
+    overflow: hidden;
+    z-index: 1;
 }
 
-.page-card:hover {
-    transform: translateY(-4px);
+/* Disable transitions during initial loading */
+.page-card-inner.no-transition {
+    transition: none;
+}
+
+.page-card-outer.no-transition {
+    transition: none;
+}
+
+.page-card-outer:hover .page-card-inner {
     box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-}
-
-.page-card[draggable="true"] {
-    cursor: move;
 }
 
 .page-thumbnail {
@@ -201,9 +216,10 @@ body {
     opacity: 0;
     transition: opacity 0.2s;
     pointer-events: none;
+    z-index: 10;
 }
 
-.page-card:hover .page-overlay {
+.page-card-outer:hover .page-overlay {
     opacity: 1 !important;
 }
 
@@ -216,7 +232,7 @@ body {
     border: none;
     cursor: pointer;
     box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-    transition: background-color 0.2s ease, transform 0.2s ease;
+    transition: background-color 0.2s ease, transform 0.2s ease, top 0.3s ease-in-out, bottom 0.3s ease-in-out, left 0.3s ease-in-out, right 0.3s ease-in-out;
     pointer-events: auto;
 }
 
@@ -352,23 +368,23 @@ body {
     height: 1.25rem;
 }
 
-.page-card[data-deleted="true"] {
-    opacity: 0.5;
+.page-card-outer[data-deleted="true"] {
+    opacity: 0.6;
 }
 
-.page-card[data-deleted="true"] .page-thumbnail {
-    filter: grayscale(1);
+.page-card-outer[data-deleted="true"] .page-thumbnail {
+    filter: grayscale(0.6) sepia(1) hue-rotate(-30deg) saturate(3) brightness(0.8);
 }
 
-.page-card[data-modified="true"]:not([data-deleted="true"]) {
+.page-card-outer[data-modified="true"]:not([data-deleted="true"]) {
     box-shadow: 0 0 0 3px var(--accent);
 }
 
-.page-card[data-modified="true"]:not([data-deleted="true"]):hover {
+.page-card-outer[data-modified="true"]:not([data-deleted="true"]):hover {
     box-shadow: 0 0 0 3px var(--accent), 0 4px 16px rgba(0,0,0,0.5);
 }
 
-.page-card[data-deleted="true"]::after {
+.page-card-outer[data-deleted="true"]::after {
     content: "DELETED";
     position: absolute;
     top: 50%;
@@ -384,14 +400,14 @@ body {
 }
 
 /* Hide rotate and mirror buttons on deleted pages */
-.page-card[data-deleted="true"] .page-overlay .btn-top-left,
-.page-card[data-deleted="true"] .page-overlay .btn-top-right,
-.page-card[data-deleted="true"] .page-overlay .btn-middle-left,
-.page-card[data-deleted="true"] .page-overlay .btn-middle-right {
+.page-card-outer[data-deleted="true"] .page-overlay .btn-top-left,
+.page-card-outer[data-deleted="true"] .page-overlay .btn-top-right,
+.page-card-outer[data-deleted="true"] .page-overlay .btn-middle-left,
+.page-card-outer[data-deleted="true"] .page-overlay .btn-middle-right {
     display: none !important;
 }
 
-.page-card[data-modified="true"] .page-info::after {
+.page-card-outer[data-modified="true"] .page-info::after {
     content: "✏️";
     margin-left: 4px;
 }

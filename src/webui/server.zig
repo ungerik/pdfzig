@@ -85,7 +85,46 @@ pub const Server = struct {
         const method = parts.next() orelse return;
         const target = parts.next() orelse return;
 
+        // Parse headers to extract X-Session-ID and find body start
+        var session_id: ?[]const u8 = null;
+        var headers_end_pos: usize = 0;
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, "\r\n ");
+            if (trimmed.len == 0) {
+                // Empty line marks end of headers
+                // Calculate position after this line in original request_str
+                const line_start = @intFromPtr(line.ptr) - @intFromPtr(request_str.ptr);
+                headers_end_pos = line_start + line.len;
+                // Skip past \r\n after empty line
+                if (headers_end_pos + 2 <= request_str.len and
+                    request_str[headers_end_pos] == '\r' and
+                    request_str[headers_end_pos + 1] == '\n')
+                {
+                    headers_end_pos += 2;
+                } else if (headers_end_pos + 1 <= request_str.len and
+                    request_str[headers_end_pos] == '\n')
+                {
+                    headers_end_pos += 1;
+                }
+                break;
+            }
+
+            // Look for X-Session-ID header
+            if (std.mem.startsWith(u8, trimmed, "X-Session-ID:") or
+                std.mem.startsWith(u8, trimmed, "x-session-id:"))
+            {
+                const colon_pos = std.mem.indexOf(u8, trimmed, ":") orelse continue;
+                session_id = std.mem.trim(u8, trimmed[colon_pos + 1 ..], " \r\n");
+            }
+        }
+
+        // Extract body (data after headers)
+        const body = if (headers_end_pos < request_str.len)
+            request_str[headers_end_pos..]
+        else
+            &[_]u8{};
+
         // Dispatch to route handler
-        try routes.dispatch(self.state, connection, method, target, self.readonly);
+        try routes.dispatch(self.state, connection, method, target, self.readonly, session_id, body);
     }
 };

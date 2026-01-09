@@ -1,5 +1,5 @@
 //! PDF page modification operations
-//! Handles rotate, mirror, delete, and revert operations with state tracking
+//! Non-destructive transformations using cumulative transformation matrices
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
@@ -7,14 +7,29 @@ const state_mod = @import("state.zig");
 const GlobalState = state_mod.GlobalState;
 const PageState = state_mod.PageState;
 const DocumentState = state_mod.DocumentState;
+const Matrix = state_mod.Matrix;
 const page_renderer = @import("page_renderer.zig");
 
+/// Check if all pages in document are in their original state
+fn checkDocumentModificationStatus(doc: *DocumentState) void {
+    var has_modifications = false;
+    for (doc.pages.items) |page| {
+        if (!page.modifications.isEmpty()) {
+            has_modifications = true;
+            break;
+        }
+    }
+    doc.modified = has_modifications;
+}
+
 /// Rotate a page by specified degrees (90, 180, 270, or -90)
+/// Non-destructive: adds rotation operation to version history
 pub fn rotatePage(
     state: *GlobalState,
     doc_id: u32,
     page_index: u32,
     degrees: i32,
+    operation_desc: []const u8,
 ) !void {
     state.lock();
     defer state.unlock();
@@ -24,35 +39,49 @@ pub fn rotatePage(
 
     const page_state = &doc.pages.items[page_index];
 
-    // Load the page
-    var page = try doc.doc.loadPage(page_state.original_index);
-    defer page.close();
+    // Get current state
+    const current = page_state.modifications.getCurrentState();
 
-    // Rotate the page
-    if (!page.rotate(degrees)) return error.InvalidRotation;
-    if (!page.generateContent()) return error.GenerateContentFailed;
+    // Get original dimensions for matrix calculation
+    var original_page = try doc.doc_original.loadPage(page_state.original_index);
+    defer original_page.close();
+    const original_width = original_page.getWidth();
+    const original_height = original_page.getHeight();
 
-    // Update modification tracking
-    page_state.modifications.rotation = @mod(page_state.modifications.rotation + degrees, 360);
+    // Create rotation matrix using current dimensions
+    const rotation_matrix = Matrix.rotation(degrees, current.width, current.height);
 
-    // Increment version for cache busting
-    page_state.version +%= 1;
+    // Compose with current matrix
+    const new_matrix = current.matrix.multiply(rotation_matrix);
 
-    // Invalidate thumbnail cache (keep original)
-    page_renderer.invalidateThumbnailCache(page_state, state.allocator);
+    // Calculate new dimensions
+    const dims = new_matrix.transformDimensions(original_width, original_height);
 
-    doc.modified = true;
+    // Add new version to history
+    try page_state.modifications.addVersion(
+        operation_desc,
+        new_matrix,
+        dims.width,
+        dims.height,
+        current.deleted,
+    );
+
+    // Update document modification status
+    checkDocumentModificationStatus(doc);
+
     state.notifyChange();
 }
 
 pub const MirrorDirection = enum { updown, leftright };
 
 /// Mirror a page vertically (up-down) or horizontally (left-right)
+/// Non-destructive: adds mirror operation to version history
 pub fn mirrorPage(
     state: *GlobalState,
     doc_id: u32,
     page_index: u32,
     direction: MirrorDirection,
+    operation_desc: []const u8,
 ) !void {
     state.lock();
     defer state.unlock();
@@ -62,48 +91,39 @@ pub fn mirrorPage(
 
     const page_state = &doc.pages.items[page_index];
 
-    // Load the page
-    var page = try doc.doc.loadPage(page_state.original_index);
-    defer page.close();
+    // Get current state
+    const current = page_state.modifications.getCurrentState();
 
-    // Get page dimensions
-    const page_width = page.getWidth();
-    const page_height = page.getHeight();
+    // Get original dimensions for matrix calculation
+    var original_page = try doc.doc_original.loadPage(page_state.original_index);
+    defer original_page.close();
+    const original_width = original_page.getWidth();
+    const original_height = original_page.getHeight();
 
-    // Mirror all objects on the page
-    const object_count = page.getObjectCount();
-    var i: u32 = 0;
-    while (i < object_count) : (i += 1) {
-        if (page.getObject(i)) |obj| {
-            switch (direction) {
-                .updown => {
-                    // Mirror vertically: flip around horizontal axis
-                    obj.transform(1, 0, 0, -1, 0, page_height);
-                },
-                .leftright => {
-                    // Mirror horizontally: flip around vertical axis
-                    obj.transform(-1, 0, 0, 1, page_width, 0);
-                },
-            }
-        }
-    }
+    // Create mirror matrix using current dimensions
+    const mirror_matrix = switch (direction) {
+        .updown => Matrix.mirrorVertical(current.height),
+        .leftright => Matrix.mirrorHorizontal(current.width),
+    };
 
-    // Generate content to apply transformations
-    if (!page.generateContent()) return error.GenerateContentFailed;
+    // Compose with current matrix
+    const new_matrix = current.matrix.multiply(mirror_matrix);
 
-    // Update modification tracking (toggle the mirror state)
-    switch (direction) {
-        .updown => page_state.modifications.mirror_ud = !page_state.modifications.mirror_ud,
-        .leftright => page_state.modifications.mirror_lr = !page_state.modifications.mirror_lr,
-    }
+    // Calculate new dimensions
+    const dims = new_matrix.transformDimensions(original_width, original_height);
 
-    // Increment version for cache busting
-    page_state.version +%= 1;
+    // Add new version to history
+    try page_state.modifications.addVersion(
+        operation_desc,
+        new_matrix,
+        dims.width,
+        dims.height,
+        current.deleted,
+    );
 
-    // Invalidate thumbnail cache (keep original)
-    page_renderer.invalidateThumbnailCache(page_state, state.allocator);
+    // Update document modification status
+    checkDocumentModificationStatus(doc);
 
-    doc.modified = true;
     state.notifyChange();
 }
 
@@ -121,17 +141,28 @@ pub fn deletePage(
 
     const page_state = &doc.pages.items[page_index];
 
-    // Toggle deleted state
-    page_state.modifications.deleted = !page_state.modifications.deleted;
+    // Get current state
+    const current = page_state.modifications.getCurrentState();
 
-    // Increment version for cache busting
-    page_state.version +%= 1;
+    // Toggle deleted status and add new version
+    const new_deleted = !current.deleted;
+    const operation_desc = if (new_deleted) "delete" else "undelete";
 
-    doc.modified = true;
+    try page_state.modifications.addVersion(
+        operation_desc,
+        current.matrix,
+        current.width,
+        current.height,
+        new_deleted,
+    );
+
+    // Check if all pages are now in original state
+    checkDocumentModificationStatus(doc);
+
     state.notifyChange();
 }
 
-/// Revert a page to its original state
+/// Revert a page to its original state (version 0)
 pub fn revertPage(
     state: *GlobalState,
     doc_id: u32,
@@ -145,59 +176,11 @@ pub fn revertPage(
 
     const page_state = &doc.pages.items[page_index];
 
-    // Reload the document from original bytes
-    if (doc.original_bytes == null) return error.NoOriginalData;
+    // Reset to version 0 (original state)
+    page_state.modifications.reset();
 
-    // Close current document
-    doc.doc.close();
-
-    // For uploaded documents, write original_bytes to temp file first
-    const allocator = state.allocator;
-    const temp_path = try std.fmt.allocPrint(
-        allocator,
-        "/tmp/pdfzig-revert-{d}.pdf",
-        .{std.time.milliTimestamp()},
-    );
-    defer allocator.free(temp_path);
-
-    const file = try std.fs.cwd().createFile(temp_path, .{});
-    defer file.close();
-    try file.writeAll(doc.original_bytes.?);
-
-    // Reopen from temp file
-    doc.doc = try pdfium.Document.open(temp_path);
-
-    // Clean up temp file
-    std.fs.cwd().deleteFile(temp_path) catch {};
-
-    // Clear all modifications for this page
-    page_state.modifications = .{};
-
-    // Reset version
-    page_state.version = 0;
-
-    // Restore thumbnail from original cache if available
-    if (page_state.original_thumbnail_cache) |original| {
-        // Free current cache if it exists
-        if (page_state.thumbnail_cache) |current| {
-            state.allocator.free(current);
-        }
-        // Duplicate the original cache
-        page_state.thumbnail_cache = try state.allocator.dupe(u8, original);
-    } else {
-        // No original cache, invalidate so it re-renders
-        page_renderer.invalidateThumbnailCache(page_state, state.allocator);
-    }
-
-    // Check if document still has any modifications
-    var has_modifications = false;
-    for (doc.pages.items) |page| {
-        if (!page.modifications.isEmpty()) {
-            has_modifications = true;
-            break;
-        }
-    }
-    doc.modified = has_modifications;
+    // Check if all pages are now in original state
+    checkDocumentModificationStatus(doc);
 
     state.notifyChange();
 }
@@ -266,49 +249,14 @@ pub fn resetAll(state: *GlobalState) !void {
     state.lock();
     defer state.unlock();
 
-    const allocator = state.allocator;
-
     for (state.documents.items) |doc| {
-        // Reload document from original bytes
-        if (doc.original_bytes == null) continue;
-
-        doc.doc.close();
-
-        // Write original_bytes to temp file for reopening
-        const temp_path = try std.fmt.allocPrint(
-            allocator,
-            "/tmp/pdfzig-reset-{d}.pdf",
-            .{std.time.milliTimestamp()},
-        );
-        defer allocator.free(temp_path);
-
-        const file = try std.fs.cwd().createFile(temp_path, .{});
-        defer file.close();
-        try file.writeAll(doc.original_bytes.?);
-
-        // Reopen from temp file
-        doc.doc = try pdfium.Document.open(temp_path);
-
-        // Clean up temp file
-        std.fs.cwd().deleteFile(temp_path) catch {};
-
-        // Reset all page modifications
+        // Reset all page modifications to version 0
         for (doc.pages.items) |*page| {
-            page.modifications = .{};
-            page.version = 0;
+            // Reset to version 0 (original state)
+            page.modifications.reset();
 
-            // Restore thumbnail from original cache if available
-            if (page.original_thumbnail_cache) |original| {
-                // Free current cache if it exists
-                if (page.thumbnail_cache) |current| {
-                    allocator.free(current);
-                }
-                // Duplicate the original cache
-                page.thumbnail_cache = allocator.dupe(u8, original) catch null;
-            } else {
-                // No original cache, invalidate so it re-renders
-                page_renderer.invalidateThumbnailCache(page, allocator);
-            }
+            // Invalidate thumbnail cache
+            page_renderer.invalidateThumbnailCache(page, state.allocator);
         }
 
         doc.modified = false;
