@@ -33,6 +33,25 @@ pub const FPDF_FILEWRITE = extern struct {
     WriteBlock: *const fn (pThis: *FPDF_FILEWRITE, pData: ?*const anyopaque, size: c_ulong) callconv(.c) c_int,
 };
 
+/// 2D affine transformation matrix (a, b, c, d, e, f)
+/// Transforms point (x, y) to (ax + cy + e, bx + dy + f)
+pub const FS_MATRIX = extern struct {
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+    e: f32,
+    f: f32,
+};
+
+/// Rectangle with floating-point coordinates
+pub const FS_RECTF = extern struct {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+};
+
 // ============================================================================
 // Error Constants
 // ============================================================================
@@ -99,6 +118,7 @@ pub const PdfiumLib = struct {
     FPDF_GetPageWidth: *const fn (page: FPDF_PAGE) callconv(.c) f64,
     FPDF_GetPageHeight: *const fn (page: FPDF_PAGE) callconv(.c) f64,
     FPDF_RenderPageBitmap: *const fn (bitmap: FPDF_BITMAP, page: FPDF_PAGE, start_x: c_int, start_y: c_int, size_x: c_int, size_y: c_int, rotate: c_int, flags: c_int) callconv(.c) void,
+    FPDF_RenderPageBitmapWithMatrix: *const fn (bitmap: FPDF_BITMAP, page: FPDF_PAGE, matrix: *const FS_MATRIX, clipping: *const FS_RECTF, flags: c_int) callconv(.c) void,
 
     // Bitmap functions
     FPDFBitmap_CreateEx: *const fn (width: c_int, height: c_int, format: c_int, first_scan: ?*anyopaque, stride: c_int) callconv(.c) FPDF_BITMAP,
@@ -142,9 +162,12 @@ pub const PdfiumLib = struct {
     FPDFAttachment_SetFile: *const fn (attachment: FPDF_ATTACHMENT, document: FPDF_DOCUMENT, contents: ?*const anyopaque, len: c_ulong) callconv(.c) FPDF_BOOL,
     FPDFDoc_DeleteAttachment: *const fn (document: FPDF_DOCUMENT, index: c_int) callconv(.c) FPDF_BOOL,
 
-    // Page rotation functions
+    // Page rotation and box functions
     FPDFPage_GetRotation: *const fn (page: FPDF_PAGE) callconv(.c) c_int,
     FPDFPage_SetRotation: *const fn (page: FPDF_PAGE, rotate: c_int) callconv(.c) void,
+    FPDFPage_SetMediaBox: *const fn (page: FPDF_PAGE, left: f32, bottom: f32, right: f32, top: f32) callconv(.c) void,
+    FPDFPage_GetCropBox: *const fn (page: FPDF_PAGE, left: *f32, bottom: *f32, right: *f32, top: *f32) callconv(.c) FPDF_BOOL,
+    FPDFPage_SetCropBox: *const fn (page: FPDF_PAGE, left: f32, bottom: f32, right: f32, top: f32) callconv(.c) void,
     FPDFPage_GenerateContent: *const fn (page: FPDF_PAGE) callconv(.c) FPDF_BOOL,
 
     // Page deletion function
@@ -219,7 +242,6 @@ pub fn getLibraryExtension() []const u8 {
         else => ".so",
     };
 }
-
 
 /// Extract version number from a library path
 /// E.g., "pdfium_v7606.dylib" -> 7606, "libpdfium_v7606.so" -> 7606

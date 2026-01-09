@@ -619,6 +619,26 @@ pub const Page = struct {
         );
     }
 
+    /// Render page with transformation matrix and clipping rectangle
+    /// This is non-destructive - the page is rendered with the matrix applied
+    /// but the page itself is not modified
+    pub fn renderWithMatrix(
+        self: Page,
+        bitmap: *Bitmap,
+        matrix: loader.FS_MATRIX,
+        clipping: loader.FS_RECTF,
+        flags: RenderFlags,
+    ) void {
+        const l = lib orelse return;
+        l.FPDF_RenderPageBitmapWithMatrix(
+            bitmap.handle,
+            self.handle,
+            &matrix,
+            &clipping,
+            flags.toInt(),
+        );
+    }
+
     /// Load text information for this page
     pub fn loadTextPage(self: Page) ?TextPage {
         const l = lib orelse return null;
@@ -695,17 +715,61 @@ pub const Page = struct {
     }
 
     /// Set page rotation (0=0°, 1=90°, 2=180°, 3=270° clockwise)
-    pub fn setRotation(self: Page, rotation: Rotation) void {
-        const l = lib orelse return;
+    pub fn setRotation(self: Page, rotation: Rotation) bool {
+        const l = lib orelse return false;
         l.FPDFPage_SetRotation(self.handle, @intFromEnum(rotation));
+        return true;
+    }
+
+    /// Set page media box (bounding box for page content)
+    pub fn setMediaBox(self: Page, left: f64, bottom: f64, right: f64, top: f64) bool {
+        const l = lib orelse return false;
+        l.FPDFPage_SetMediaBox(
+            self.handle,
+            @floatCast(left),
+            @floatCast(bottom),
+            @floatCast(right),
+            @floatCast(top),
+        );
+        return true;
+    }
+
+    /// Get page crop box (visible/printable region)
+    /// Returns null if crop box is not defined for this page
+    pub fn getCropBox(self: Page) ?struct { left: f64, bottom: f64, right: f64, top: f64 } {
+        const l = lib orelse return null;
+        var left: f32 = 0;
+        var bottom: f32 = 0;
+        var right: f32 = 0;
+        var top: f32 = 0;
+        if (l.FPDFPage_GetCropBox(self.handle, &left, &bottom, &right, &top) == 0) {
+            return null;
+        }
+        return .{
+            .left = left,
+            .bottom = bottom,
+            .right = right,
+            .top = top,
+        };
+    }
+
+    /// Set page crop box (visible/printable region)
+    pub fn setCropBox(self: Page, left: f64, bottom: f64, right: f64, top: f64) void {
+        const l = lib orelse return;
+        l.FPDFPage_SetCropBox(
+            self.handle,
+            @floatCast(left),
+            @floatCast(bottom),
+            @floatCast(right),
+            @floatCast(top),
+        );
     }
 
     /// Rotate page by additional degrees (must be multiple of 90)
     pub fn rotate(self: Page, degrees: i32) bool {
         const delta = Rotation.fromDegrees(degrees) orelse return false;
         const current = self.getRotation();
-        self.setRotation(current.add(delta));
-        return true;
+        return self.setRotation(current.add(delta));
     }
 
     /// Insert a page object into this page
