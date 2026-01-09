@@ -5,5 +5,8 @@ zig-out/
 # Test cache directory for downloaded PDF samples
 test-cache/
 
+# Playwright MCP directory
+.playwright-mcp/
+
 # System files
 .DS_Store

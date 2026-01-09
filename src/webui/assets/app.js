@@ -110,7 +110,7 @@ function calculateMirrorMatrix(direction, width, height) {
         return [1, 0, 0, -1, 0, height];
     } else {
         // Horizontal mirror: flip around vertical axis
-        return [- 1, 0, 0, 1, width, 0];
+        return [-1, 0, 0, 1, width, 0];
     }
 }
 
@@ -423,9 +423,15 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Page operation functions
-async function rotatePage(pageId, degrees) {
+
+/**
+ * Get page state for an operation, returning null if not ready
+ * @param {string} pageId - Page identifier
+ * @returns {Object|null} - Page state or null if not initialized
+ */
+function getPageStateForOperation(pageId) {
     const card = document.querySelector(`.page-card-outer[data-page-id="${pageId}"]`);
-    if (!card) return;
+    if (!card) return null;
 
     const history = pageVersionStates.get(pageId);
     const currentVersion = pageCurrentVersion.get(pageId);
@@ -433,31 +439,45 @@ async function rotatePage(pageId, degrees) {
 
     if (!history || currentVersion === undefined || !originalDims) {
         console.error('Page state not initialized for:', pageId);
-        return;
+        return null;
     }
 
-    const currentState = history[currentVersion];
+    return { card, history, currentVersion, originalDims, currentState: history[currentVersion] };
+}
+
+/**
+ * Apply a page transformation and sync with server
+ * @param {string} pageId - Page identifier
+ * @param {Object} params - Operation parameters
+ * @param {number[]} params.transformMatrix - Transformation matrix to apply
+ * @param {string} params.operation - Operation description
+ * @param {Object} params.requestBody - Additional request body fields
+ * @param {string} params.errorMessage - Error message to show on failure
+ */
+async function applyPageTransformation(pageId, params) {
+    const state = getPageStateForOperation(pageId);
+    if (!state) return;
+
+    const { card, history, currentVersion, originalDims, currentState } = state;
+    const { transformMatrix, operation, requestBody, errorMessage } = params;
 
     // Calculate new matrix locally
-    const rotationMatrix = calculateRotationMatrix(degrees, currentState.width, currentState.height);
-    const newMatrix = multiplyMatrices(currentState.matrix, rotationMatrix);
+    const newMatrix = multiplyMatrices(currentState.matrix, transformMatrix);
     const newDims = transformDimensions(newMatrix, originalDims.width, originalDims.height);
 
     // Create new version state
     const newState = {
         version: currentVersion + 1,
-        operation: `rotate ${degrees}° ${degrees > 0 ? 'CW' : 'CCW'}`,
+        operation: operation,
         matrix: newMatrix,
         width: newDims.width,
         height: newDims.height,
         deleted: currentState.deleted
     };
 
-    // Show loading spinner
     showLoadingSpinner(card);
 
     try {
-        // Send to server for validation and persistence
         const response = await fetch(`/api/pages/${pageId}/operation`, {
             method: 'POST',
             headers: {
@@ -465,8 +485,7 @@ async function rotatePage(pageId, degrees) {
                 'X-Session-ID': sessionId
             },
             body: JSON.stringify({
-                type: 'rotate',
-                degrees: degrees,
+                ...requestBody,
                 expected_version: currentVersion,
                 new_state: newState
             })
@@ -475,108 +494,55 @@ async function rotatePage(pageId, degrees) {
         const data = await response.json();
 
         if (data.success) {
-            // Server accepted - update local state
             history.push(newState);
             pageCurrentVersion.set(pageId, newState.version);
-
-            // Apply CSS transform (instant visual feedback)
             applyTransformToElement(pageId);
 
-            // Update document modified state
             const docId = pageId.split('-')[0];
             setDocumentModifiedState(docId, data.document_modified);
 
-            // Update UI state
             updateResetButtonState();
             updateClearButtonConfirmation();
         } else {
-            console.error('Rotation rejected by server');
-            showErrorMessage('Failed to rotate page. Please try again.');
+            console.error('Operation rejected by server');
+            showErrorMessage(errorMessage);
         }
     } catch (err) {
-        console.error('Rotation error:', err);
-        showErrorMessage('Failed to rotate page. Please try again.');
+        console.error('Operation error:', err);
+        showErrorMessage(errorMessage);
     } finally {
         hideLoadingSpinner(card);
     }
 }
 
+async function rotatePage(pageId, degrees) {
+    const state = getPageStateForOperation(pageId);
+    if (!state) return;
+
+    const rotationMatrix = calculateRotationMatrix(degrees, state.currentState.width, state.currentState.height);
+    const operation = `rotate ${degrees}° ${degrees > 0 ? 'CW' : 'CCW'}`;
+
+    await applyPageTransformation(pageId, {
+        transformMatrix: rotationMatrix,
+        operation: operation,
+        requestBody: { type: 'rotate', degrees: degrees },
+        errorMessage: 'Failed to rotate page. Please try again.'
+    });
+}
+
 async function mirrorPage(pageId, direction) {
-    const card = document.querySelector(`.page-card-outer[data-page-id="${pageId}"]`);
-    if (!card) return;
+    const state = getPageStateForOperation(pageId);
+    if (!state) return;
 
-    const history = pageVersionStates.get(pageId);
-    const currentVersion = pageCurrentVersion.get(pageId);
-    const originalDims = pageOriginalDimensions.get(pageId);
+    const mirrorMatrix = calculateMirrorMatrix(direction, state.currentState.width, state.currentState.height);
+    const operation = `mirror ${direction === 'updown' ? 'vertical' : 'horizontal'}`;
 
-    if (!history || currentVersion === undefined || !originalDims) {
-        console.error('Page state not initialized for:', pageId);
-        return;
-    }
-
-    const currentState = history[currentVersion];
-
-    // Calculate new matrix locally
-    const mirrorMatrix = calculateMirrorMatrix(direction, currentState.width, currentState.height);
-    const newMatrix = multiplyMatrices(currentState.matrix, mirrorMatrix);
-    const newDims = transformDimensions(newMatrix, originalDims.width, originalDims.height);
-
-    // Create new version state
-    const newState = {
-        version: currentVersion + 1,
-        operation: `mirror ${direction === 'updown' ? 'vertical' : 'horizontal'}`,
-        matrix: newMatrix,
-        width: newDims.width,
-        height: newDims.height,
-        deleted: currentState.deleted
-    };
-
-    // Show loading spinner
-    showLoadingSpinner(card);
-
-    try {
-        // Send to server for validation and persistence
-        const response = await fetch(`/api/pages/${pageId}/operation`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Session-ID': sessionId
-            },
-            body: JSON.stringify({
-                type: 'mirror',
-                direction: direction,
-                expected_version: currentVersion,
-                new_state: newState
-            })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-            // Server accepted - update local state
-            history.push(newState);
-            pageCurrentVersion.set(pageId, newState.version);
-
-            // Apply CSS transform (instant visual feedback)
-            applyTransformToElement(pageId);
-
-            // Update document modified state
-            const docId = pageId.split('-')[0];
-            setDocumentModifiedState(docId, data.document_modified);
-
-            // Update UI state
-            updateResetButtonState();
-            updateClearButtonConfirmation();
-        } else {
-            console.error('Mirror rejected by server');
-            showErrorMessage('Failed to mirror page. Please try again.');
-        }
-    } catch (err) {
-        console.error('Mirror error:', err);
-        showErrorMessage('Failed to mirror page. Please try again.');
-    } finally {
-        hideLoadingSpinner(card);
-    }
+    await applyPageTransformation(pageId, {
+        transformMatrix: mirrorMatrix,
+        operation: operation,
+        requestBody: { type: 'mirror', direction: direction },
+        errorMessage: 'Failed to mirror page. Please try again.'
+    });
 }
 
 // Show loading spinner overlay

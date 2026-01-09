@@ -11,6 +11,60 @@ const page_renderer = @import("page_renderer.zig");
 const operations = @import("operations.zig");
 const pdfium = @import("../pdfium/pdfium.zig");
 
+/// Error type for baking transformations
+const BakeTransformError = error{
+    LoadPageFailed,
+    SetMediaBoxFailed,
+    SetRotationFailed,
+    GenerateContentFailed,
+};
+
+/// Bake transformation matrix into page objects
+/// Updates MediaBox/CropBox if dimensions changed, resets rotation, and generates content
+fn bakeTransformationsToPage(
+    page: *pdfium.Page,
+    matrix: Matrix,
+    new_width: f64,
+    new_height: f64,
+    orig_width: f64,
+    orig_height: f64,
+) BakeTransformError!void {
+    // Apply matrix to all page objects
+    const object_count = page.getObjectCount();
+    var i: u32 = 0;
+    while (i < object_count) : (i += 1) {
+        if (page.getObject(i)) |obj| {
+            obj.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+        }
+    }
+
+    // Update MediaBox only if dimensions changed (rotations swap dimensions)
+    // Mirrors don't change dimensions
+    const dims_changed = @abs(new_width - orig_width) > 0.1 or
+        @abs(new_height - orig_height) > 0.1;
+
+    if (dims_changed) {
+        if (!page.setMediaBox(0, 0, new_width, new_height)) {
+            return BakeTransformError.SetMediaBoxFailed;
+        }
+
+        // Update CropBox if it exists
+        if (page.getCropBox()) |_| {
+            page.setCropBox(0, 0, new_width, new_height);
+        }
+    }
+
+    // Reset rotation to 0 (transformations are baked into objects)
+    if (!page.setRotation(.none)) {
+        return BakeTransformError.SetRotationFailed;
+    }
+
+    // Generate content to commit transformations
+    if (!page.generateContent()) {
+        return BakeTransformError.GenerateContentFailed;
+    }
+}
+
 /// Dispatch HTTP request to appropriate handler
 pub fn dispatch(
     global_state: *GlobalState,
@@ -243,22 +297,6 @@ fn serveCSS(connection: std.net.Server.Connection, css: []const u8) !void {
 /// Serve JavaScript file
 fn serveJS(connection: std.net.Server.Connection, js: []const u8) !void {
     return serveStaticFile(connection, js, "application/javascript");
-}
-
-/// Serve JSON response
-fn serveJSON(connection: std.net.Server.Connection, json: []const u8) !void {
-    var buffer: [512]u8 = undefined;
-    const response = try std.fmt.bufPrint(&buffer,
-        \\HTTP/1.1 200 OK
-        \\Content-Type: application/json
-        \\Content-Length: {d}
-        \\Connection: close
-        \\
-        \\
-    , .{json.len});
-
-    _ = try connection.stream.write(response);
-    _ = try connection.stream.write(json);
 }
 
 /// Serve 404 Not Found
@@ -583,7 +621,7 @@ fn servePageListJSON(global_state: *GlobalState, connection: std.net.Server.Conn
 
     // Serialize to JSON
     const json = try stringifyJson(response, allocator);
-    try serveJSON(connection, json);
+    try serveJson(connection, json);
 }
 
 /// Serve PNG thumbnail for a page
@@ -938,7 +976,7 @@ fn handleOperationJSON(
     };
 
     const json = try stringifyJson(response, allocator);
-    try serveJSON(connection, json);
+    try serveJson(connection, json);
 }
 
 /// Handle page download request (download single page as PDF)
@@ -978,68 +1016,31 @@ fn handlePageDownload(global_state: *GlobalState, connection: std.net.Server.Con
 
     // Check if we need to bake transformations
     if (page_state.modifications.needsTransformation()) {
-        // Load the newly imported page (it's at index 0 in the new document)
         var page = new_doc.loadPage(0) catch {
             return serveError(connection, .internal_server_error, "Failed to load imported page");
         };
         defer page.close();
 
-        // Get original dimensions
         var orig_page = try doc.doc_original.loadPage(page_state.original_index);
         defer orig_page.close();
-        const orig_width = orig_page.getWidth();
-        const orig_height = orig_page.getHeight();
 
-        // Get the cumulative transformation matrix from current state
         const current_state = page_state.modifications.getCurrentState();
-        const m = current_state.matrix;
 
-        // Apply matrix to all page objects
-        const object_count = page.getObjectCount();
-        var i: u32 = 0;
-        while (i < object_count) : (i += 1) {
-            if (page.getObject(i)) |obj| {
-                obj.transform(m.a, m.b, m.c, m.d, m.e, m.f);
-            }
-        }
-
-        // Update MediaBox only if dimensions changed (rotations)
-        // Mirrors don't change dimensions, only 90°/270° rotations do
-        const dims_changed = @abs(current_state.width - orig_width) > 0.1 or
-            @abs(current_state.height - orig_height) > 0.1;
-
-        if (dims_changed) {
-            // Update MediaBox
-            if (!page.setMediaBox(
-                0,
-                0,
-                current_state.width,
-                current_state.height,
-            )) {
-                return serveError(connection, .internal_server_error, "Failed to set MediaBox");
-            }
-
-            // Update CropBox if it exists
-            if (page.getCropBox()) |_| {
-                // Page has CropBox defined - update it to match new dimensions
-                page.setCropBox(
-                    0,
-                    0,
-                    current_state.width,
-                    current_state.height,
-                );
-            }
-        }
-
-        // Reset rotation to 0 (transformations are baked into objects)
-        if (!page.setRotation(.none)) {
-            return serveError(connection, .internal_server_error, "Failed to reset rotation");
-        }
-
-        // Generate content to commit transformations
-        if (!page.generateContent()) {
-            return serveError(connection, .internal_server_error, "Failed to generate content");
-        }
+        bakeTransformationsToPage(
+            &page,
+            current_state.matrix,
+            current_state.width,
+            current_state.height,
+            orig_page.getWidth(),
+            orig_page.getHeight(),
+        ) catch |err| {
+            return switch (err) {
+                BakeTransformError.SetMediaBoxFailed => serveError(connection, .internal_server_error, "Failed to set MediaBox"),
+                BakeTransformError.SetRotationFailed => serveError(connection, .internal_server_error, "Failed to reset rotation"),
+                BakeTransformError.GenerateContentFailed => serveError(connection, .internal_server_error, "Failed to generate content"),
+                else => serveError(connection, .internal_server_error, "Failed to apply transformations"),
+            };
+        };
     }
 
     // Save to temporary file
@@ -1250,69 +1251,31 @@ fn sendPdfDownload(
 
         // Check if we need to bake transformations
         if (page_state.modifications.needsTransformation()) {
-            // Load the newly imported page (it's at the current page_num)
             var page = new_doc.loadPage(page_num) catch {
                 return serveError(connection, .internal_server_error, "Failed to load imported page");
             };
             defer page.close();
 
-            // Get original dimensions from doc_original
             var orig_page = doc.doc_original.loadPage(page_state.original_index) catch {
                 return serveError(connection, .internal_server_error, "Failed to load original page");
             };
             defer orig_page.close();
-            const orig_width = orig_page.getWidth();
-            const orig_height = orig_page.getHeight();
 
-            // Get the cumulative transformation matrix from current state
-            const m = current_state.matrix;
-
-            // Apply matrix to all page objects
-            const object_count = page.getObjectCount();
-            var i: u32 = 0;
-            while (i < object_count) : (i += 1) {
-                if (page.getObject(i)) |obj| {
-                    obj.transform(m.a, m.b, m.c, m.d, m.e, m.f);
-                }
-            }
-
-            // Update MediaBox only if dimensions changed (rotations swap dimensions)
-            // Mirrors don't change dimensions
-            const dims_changed = @abs(current_state.width - orig_width) > 0.1 or
-                @abs(current_state.height - orig_height) > 0.1;
-
-            if (dims_changed) {
-                // Update MediaBox
-                if (!page.setMediaBox(
-                    0,
-                    0,
-                    current_state.width,
-                    current_state.height,
-                )) {
-                    return serveError(connection, .internal_server_error, "Failed to set MediaBox");
-                }
-
-                // Update CropBox if it exists
-                if (page.getCropBox()) |_| {
-                    // Page has CropBox defined - update it to match new dimensions
-                    page.setCropBox(
-                        0,
-                        0,
-                        current_state.width,
-                        current_state.height,
-                    );
-                }
-            }
-
-            // Reset rotation to 0 (transformations are baked into objects)
-            if (!page.setRotation(.none)) {
-                return serveError(connection, .internal_server_error, "Failed to reset rotation");
-            }
-
-            // Generate content to commit transformations
-            if (!page.generateContent()) {
-                return serveError(connection, .internal_server_error, "Failed to generate content");
-            }
+            bakeTransformationsToPage(
+                &page,
+                current_state.matrix,
+                current_state.width,
+                current_state.height,
+                orig_page.getWidth(),
+                orig_page.getHeight(),
+            ) catch |err| {
+                return switch (err) {
+                    BakeTransformError.SetMediaBoxFailed => serveError(connection, .internal_server_error, "Failed to set MediaBox"),
+                    BakeTransformError.SetRotationFailed => serveError(connection, .internal_server_error, "Failed to reset rotation"),
+                    BakeTransformError.GenerateContentFailed => serveError(connection, .internal_server_error, "Failed to generate content"),
+                    else => serveError(connection, .internal_server_error, "Failed to apply transformations"),
+                };
+            };
         }
 
         page_num += 1;
