@@ -667,37 +667,103 @@ fn serveThumbnail(global_state: *GlobalState, connection: std.net.Server.Connect
 fn serveFullsizePage(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, dpi: f64) !void {
     const allocator = std.heap.page_allocator;
 
+    global_state.lock();
+    defer global_state.unlock();
+
     // Get document and page
     const doc = global_state.getDocument(page_id.doc_id) orelse return serve404(connection);
     if (page_id.page_num >= doc.pages.items.len) return serve404(connection);
 
     const page_state = &doc.pages.items[page_id.page_num];
 
-    // Render at full size (not cached)
-    const png_bytes = page_renderer.renderFullSize(
-        allocator,
-        doc.doc,
-        page_state.original_index,
-        dpi,
-    ) catch |err| {
-        std.debug.print("Error rendering full-size page: {}\n", .{err});
-        return serve404(connection);
-    };
-    defer allocator.free(png_bytes);
+    // If page has transformations, create temporary PDF with baked transformations
+    if (page_state.modifications.needsTransformation()) {
+        // Create a new empty PDF document
+        var new_doc = pdfium.Document.createNew() catch {
+            return serveError(connection, .internal_server_error, "Failed to create new document");
+        };
+        defer new_doc.close();
 
-    // Send PNG response
-    var buffer: [256]u8 = undefined;
-    const response =
-        "HTTP/1.1 200 OK\r\n" ++
-        "Content-Type: image/png\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Cache-Control: no-cache\r\n" ++
-        "Connection: close\r\n" ++
-        "\r\n";
+        // Import the single page from ORIGINAL document (unmodified)
+        const page_indices = [_]c_int{@intCast(page_state.original_index)};
+        if (!new_doc.importPages(&doc.doc_original, &page_indices, 0)) {
+            return serveError(connection, .internal_server_error, "Failed to import page");
+        }
 
-    const response_str = try std.fmt.bufPrint(&buffer, response, .{png_bytes.len});
-    try connection.stream.writeAll(response_str);
-    try connection.stream.writeAll(png_bytes);
+        // Bake transformations
+        var page = new_doc.loadPage(0) catch {
+            return serveError(connection, .internal_server_error, "Failed to load imported page");
+        };
+        defer page.close();
+
+        var orig_page = try doc.doc_original.loadPage(page_state.original_index);
+        defer orig_page.close();
+
+        const current_state = page_state.modifications.getCurrentState();
+
+        bakeTransformationsToPage(
+            &page,
+            current_state.matrix,
+            current_state.width,
+            current_state.height,
+            orig_page.getWidth(),
+            orig_page.getHeight(),
+        ) catch {
+            return serveError(connection, .internal_server_error, "Failed to apply transformations");
+        };
+
+        // Render from the transformed document
+        const png_bytes = page_renderer.renderFullSize(
+            allocator,
+            new_doc,
+            0, // First (and only) page in temporary doc
+            dpi,
+        ) catch |err| {
+            std.debug.print("Error rendering full-size page: {}\n", .{err});
+            return serve404(connection);
+        };
+        defer allocator.free(png_bytes);
+
+        // Send PNG response
+        var buffer: [256]u8 = undefined;
+        const response =
+            "HTTP/1.1 200 OK\r\n" ++
+            "Content-Type: image/png\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Cache-Control: no-cache\r\n" ++
+            "Connection: close\r\n" ++
+            "\r\n";
+
+        const response_str = try std.fmt.bufPrint(&buffer, response, .{png_bytes.len});
+        try connection.stream.writeAll(response_str);
+        try connection.stream.writeAll(png_bytes);
+    } else {
+        // No transformations - render original page directly
+        const png_bytes = page_renderer.renderFullSize(
+            allocator,
+            doc.doc_original,
+            page_state.original_index,
+            dpi,
+        ) catch |err| {
+            std.debug.print("Error rendering full-size page: {}\n", .{err});
+            return serve404(connection);
+        };
+        defer allocator.free(png_bytes);
+
+        // Send PNG response
+        var buffer: [256]u8 = undefined;
+        const response =
+            "HTTP/1.1 200 OK\r\n" ++
+            "Content-Type: image/png\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Cache-Control: no-cache\r\n" ++
+            "Connection: close\r\n" ++
+            "\r\n";
+
+        const response_str = try std.fmt.bufPrint(&buffer, response, .{png_bytes.len});
+        try connection.stream.writeAll(response_str);
+        try connection.stream.writeAll(png_bytes);
+    }
 }
 
 /// Parse JSON request body
