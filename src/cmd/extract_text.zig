@@ -24,6 +24,7 @@ const Args = struct {
     page_range: ?[]const u8 = null,
     password: ?[]const u8 = null,
     format: TextOutputFormat = .text,
+    page_separator: ?[]const u8 = null, // null = default, "" = no separator
     show_help: bool = false,
 };
 
@@ -53,6 +54,8 @@ pub fn run(
                         std.process.exit(1);
                     };
                 }
+            } else if (std.mem.eql(u8, arg, "--page-separator") or std.mem.eql(u8, arg, "--page_separator")) {
+                args.page_separator = arg_it.next() orelse "";
             } else {
                 try stderr.print("Unknown option: {s}\n", .{arg});
                 try stderr.flush();
@@ -111,6 +114,7 @@ pub fn run(
     switch (args.format) {
         .text => {
             // Plain text extraction
+            var first_page = true;
             for (1..page_count + 1) |i| {
                 const page_num: u32 = @intCast(i);
 
@@ -127,11 +131,30 @@ pub fn run(
                 if (text_page.getText(allocator)) |text| {
                     defer allocator.free(text);
 
-                    if (page_count > 1) {
-                        try output.print("--- Page {d} ---\n", .{page_num});
+                    // Print page separator (only if not first page and multi-page document)
+                    if (!first_page and page_count > 1) {
+                        if (args.page_separator) |sep| {
+                            // User specified a separator (could be empty string)
+                            if (sep.len > 0) {
+                                // Replace {{PAGE_NO}} with actual page number
+                                try printPageSeparator(allocator, output, sep, page_num);
+                            } else {
+                                // Empty string = just newline
+                                try output.writeAll("\n");
+                            }
+                        } else {
+                            // Default separator
+                            try output.print("--- Page {d} ---\n", .{page_num});
+                        }
                     }
+
                     try output.writeAll(text);
-                    try output.writeAll("\n\n");
+                    if (first_page or args.page_separator != null) {
+                        try output.writeAll("\n");
+                    } else {
+                        try output.writeAll("\n\n");
+                    }
+                    first_page = false;
                 }
             }
         },
@@ -143,6 +166,73 @@ pub fn run(
     try output.flush();
 }
 
+/// Print page separator with template variable replacement
+fn printPageSeparator(
+    allocator: std.mem.Allocator,
+    output: *std.Io.Writer,
+    separator_template: []const u8,
+    page_num: u32,
+) !void {
+    // First, expand escape sequences like \n
+    const expanded = try expandEscapeSequences(allocator, separator_template);
+    defer allocator.free(expanded);
+
+    // Check if template contains {{PAGE_NO}}
+    if (std.mem.indexOf(u8, expanded, "{{PAGE_NO}}")) |pos| {
+        // Split and replace
+        const before = expanded[0..pos];
+        const after = expanded[pos + "{{PAGE_NO}}".len ..];
+
+        try output.writeAll(before);
+        try output.print("{d}", .{page_num});
+        try output.writeAll(after);
+        try output.writeAll("\n");
+    } else {
+        // No template variable, just print as-is
+        try output.writeAll(expanded);
+        try output.writeAll("\n");
+    }
+}
+
+/// Expand escape sequences like \n to actual characters
+fn expandEscapeSequences(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var result = std.array_list.Managed(u8).init(allocator);
+    defer result.deinit();
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '\\' and i + 1 < input.len) {
+            switch (input[i + 1]) {
+                'n' => {
+                    try result.append('\n');
+                    i += 2;
+                },
+                't' => {
+                    try result.append('\t');
+                    i += 2;
+                },
+                'r' => {
+                    try result.append('\r');
+                    i += 2;
+                },
+                '\\' => {
+                    try result.append('\\');
+                    i += 2;
+                },
+                else => {
+                    try result.append(input[i]);
+                    i += 1;
+                },
+            }
+        } else {
+            try result.append(input[i]);
+            i += 1;
+        }
+    }
+
+    return result.toOwnedSlice();
+}
+
 pub fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig extract_text [options] <input.pdf>
@@ -150,17 +240,24 @@ pub fn printUsage(stdout: *std.Io.Writer) void {
         \\Extract text content from PDF pages.
         \\
         \\Options:
-        \\  -o, --output <FILE>   Write output to file (default: stdout)
-        \\  -f, --format <FMT>    Output format: text (default) or json
-        \\  -p, --pages <RANGE>   Page range, e.g., "1-5,8,10-12" (default: all)
-        \\  -P, --password <PW>   Password for encrypted PDFs
-        \\  -h, --help            Show this help message
+        \\  -o, --output <FILE>        Write output to file (default: stdout)
+        \\  -f, --format <FMT>         Output format: text (default) or json
+        \\  -p, --pages <RANGE>        Page range, e.g., "1-5,8,10-12" (default: all)
+        \\  -P, --password <PW>        Password for encrypted PDFs
+        \\  --page-separator <SEP>     Custom page separator (text format only)
+        \\                             Use {{PAGE_NO}} for page number placeholder
+        \\                             Supports escape sequences: \n \t \r \\
+        \\                             Empty string "" = no separator, just newline
+        \\                             Default: "--- Page {{PAGE_NO}} ---"
+        \\  -h, --help                 Show this help message
         \\
         \\Examples:
         \\  pdfzig extract_text document.pdf
         \\  pdfzig extract_text -o text.txt document.pdf
         \\  pdfzig extract_text -f json document.pdf > blocks.json
         \\  pdfzig extract_text -p 1-10 document.pdf > first_pages.txt
+        \\  pdfzig extract_text --page-separator "=== Page {{PAGE_NO}} ===" doc.pdf
+        \\  pdfzig extract_text --page-separator "" document.pdf
         \\
     ) catch {};
 }
