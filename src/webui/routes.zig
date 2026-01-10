@@ -1220,6 +1220,26 @@ fn sendPdfDownload(
     doc: *state_mod.DocumentState,
     allocator: std.mem.Allocator,
 ) !void {
+    // Optimization: If document is unmodified, serve original bytes directly
+    if (!doc.modified) {
+        if (doc.getOriginalBytes()) |original_bytes| {
+            const response_header = try std.fmt.allocPrint(
+                allocator,
+                "HTTP/1.1 200 OK\r\n" ++
+                    "Content-Type: application/pdf\r\n" ++
+                    "Content-Length: {d}\r\n" ++
+                    "Content-Disposition: attachment; filename=\"{s}\"\r\n" ++
+                    "\r\n",
+                .{ original_bytes.len, doc.filename },
+            );
+
+            try connection.stream.writeAll(response_header);
+            try connection.stream.writeAll(original_bytes);
+            return;
+        }
+    }
+
+    // Document has modifications - create new document and bake transformations
     const temp_path = try std.fmt.allocPrint(
         allocator,
         "/tmp/pdfzig-download-{d}.pdf",
@@ -1227,7 +1247,6 @@ fn sendPdfDownload(
     );
     defer std.fs.cwd().deleteFile(temp_path) catch {};
 
-    // Always create new document and bake transformations
     var new_doc = pdfium.Document.createNew() catch {
         return serveError(connection, .internal_server_error, "Failed to create document");
     };
@@ -1416,7 +1435,7 @@ fn handleSplitDocument(global_state: *GlobalState, connection: std.net.Server.Co
     // Arena allocator cleans up automatically
 
     // Load first part (pages 0..split_after_page_idx)
-    var doc1 = try pdfium.Document.open(temp_path1);
+    var doc1 = try pdfium.Document.open(allocator, temp_path1);
     defer doc1.close();
 
     // Delete pages after split point in doc1
@@ -1427,7 +1446,7 @@ fn handleSplitDocument(global_state: *GlobalState, connection: std.net.Server.Co
     try doc1.saveWithVersion(temp_path1, null);
 
     // Load second part (pages split_after_page_idx+1..end)
-    var doc2 = try pdfium.Document.open(temp_path1);
+    var doc2 = try pdfium.Document.open(allocator, temp_path1);
     defer doc2.close();
 
     // Delete pages before split point in doc2

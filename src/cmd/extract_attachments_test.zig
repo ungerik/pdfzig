@@ -87,7 +87,7 @@ test "xml: ZUGFeRD PDFs have attachments" {
         const local_path = try getTestFilePath(allocator, tf.path);
         defer allocator.free(local_path);
 
-        var doc = pdfium.Document.open(local_path) catch |err| {
+        var doc = pdfium.Document.open(allocator, local_path) catch |err| {
             std.debug.print("Failed to open {s}: {}\n", .{ tf.path, err });
             return err;
         };
@@ -110,7 +110,7 @@ test "xml: ZUGFeRD PDFs contain expected XML file" {
         const local_path = try getTestFilePath(allocator, tf.path);
         defer allocator.free(local_path);
 
-        var doc = pdfium.Document.open(local_path) catch |err| {
+        var doc = pdfium.Document.open(allocator, local_path) catch |err| {
             std.debug.print("Failed to open {s}: {}\n", .{ tf.path, err });
             return err;
         };
@@ -149,7 +149,7 @@ test "xml: isXml correctly identifies XML attachments" {
         const local_path = try getTestFilePath(allocator, tf.path);
         defer allocator.free(local_path);
 
-        var doc = pdfium.Document.open(local_path) catch |err| {
+        var doc = pdfium.Document.open(allocator, local_path) catch |err| {
             std.debug.print("Failed to open {s}: {}\n", .{ tf.path, err });
             return err;
         };
@@ -182,7 +182,7 @@ test "xml: can extract XML data from ZUGFeRD PDFs" {
         const local_path = try getTestFilePath(allocator, tf.path);
         defer allocator.free(local_path);
 
-        var doc = pdfium.Document.open(local_path) catch |err| {
+        var doc = pdfium.Document.open(allocator, local_path) catch |err| {
             std.debug.print("Failed to open {s}: {}\n", .{ tf.path, err });
             return err;
         };
@@ -233,7 +233,7 @@ test "xml: ZUGFeRD v1 contains ZUGFeRD-invoice.xml" {
         const local_path = try getTestFilePath(allocator, tf.path);
         defer allocator.free(local_path);
 
-        var doc = pdfium.Document.open(local_path) catch |err| {
+        var doc = pdfium.Document.open(allocator, local_path) catch |err| {
             std.debug.print("Failed to open {s}: {}\n", .{ tf.path, err });
             return err;
         };
@@ -270,7 +270,7 @@ test "xml: ZUGFeRD v2/Factur-X contains factur-x.xml" {
         const local_path = try getTestFilePath(allocator, tf.path);
         defer allocator.free(local_path);
 
-        var doc = pdfium.Document.open(local_path) catch |err| {
+        var doc = pdfium.Document.open(allocator, local_path) catch |err| {
             std.debug.print("Failed to open {s}: {}\n", .{ tf.path, err });
             return err;
         };

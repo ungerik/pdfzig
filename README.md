@@ -9,7 +9,7 @@ A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
 - **Extract images** embedded in PDF pages
 - **Extract attachments** embedded in PDFs with glob pattern filtering
 - **Visual diff** - compare two PDFs visually, pixel by pixel
-- **Display info** including metadata, page count, encryption status, attachments, and PDF version
+- **Display info** including metadata, page count, encryption status, PDF/A conformance, attachments, and PDF version
 - **Rotate** pages by 90, 180, or 270 degrees
 - **Mirror** pages horizontally or vertically
 - **Delete** pages from PDFs
@@ -225,6 +225,7 @@ Metadata:
   Creator: LaTeX
   Producer: pdfTeX-1.40.23
   Creation Date: D:20240101120000+00'00'
+  PDF/A: PDF/A-1b
 
 Attachments: 2
   invoice.xml [XML]
@@ -232,6 +233,8 @@ Attachments: 2
 
 XML files: 1 (use 'extract_attachments "*.xml"' to extract)
 ```
+
+The `PDF/A` field is automatically detected from XMP metadata and displays the conformance level (e.g., PDF/A-1b, PDF/A-2u, PDF/A-3a). This field is only shown for PDF/A-compliant documents.
 
 Use `--json` for machine-readable output with per-page dimensions:
 ```bash

@@ -72,7 +72,7 @@ pub fn run(
     const temp_ctx = shared.setupTempFileForInPlaceEdit(input_path, args.output_path, stderr);
 
     // Open the document
-    var doc = shared.openDocumentOrExit(input_path, args.password, stderr);
+    var doc = shared.openDocumentOrExit(allocator, input_path, args.password, stderr);
     defer doc.close();
 
     const attachment_count = doc.getAttachmentCount();

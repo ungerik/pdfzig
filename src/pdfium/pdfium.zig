@@ -177,6 +177,8 @@ fn getLastError() Error {
 /// A PDF document handle
 pub const Document = struct {
     handle: loader.FPDF_DOCUMENT,
+    allocator: ?std.mem.Allocator = null,
+    pdf_buffer: ?[]u8 = null,
 
     /// Create a new empty PDF document
     pub fn createNew() Error!Document {
@@ -185,45 +187,80 @@ pub const Document = struct {
         if (handle == null) {
             return Error.Unknown;
         }
-        return .{ .handle = handle };
+        return .{ .handle = handle, .allocator = null, .pdf_buffer = null };
     }
 
-    /// Open a PDF document from a file path
-    pub fn open(path: []const u8) Error!Document {
+    /// Open a PDF document from a file path (loads entire file into memory)
+    pub fn open(allocator: std.mem.Allocator, path: []const u8) Error!Document {
         const l = lib orelse return Error.LibraryNotLoaded;
 
-        // Create null-terminated path
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (path.len >= path_buf.len) return Error.FileNotFound;
-        @memcpy(path_buf[0..path.len], path);
-        path_buf[path.len] = 0;
+        // Load entire PDF file into memory
+        const file = std.fs.cwd().openFile(path, .{}) catch return Error.FileNotFound;
+        defer file.close();
 
-        const handle = l.FPDF_LoadDocument(&path_buf, null);
-        if (handle == null) {
-            return getLastError();
+        const stat = file.stat() catch return Error.FileNotFound;
+        const pdf_bytes = allocator.alloc(u8, stat.size) catch return Error.Unknown;
+        errdefer allocator.free(pdf_bytes);
+
+        const bytes_read = file.readAll(pdf_bytes) catch return Error.FileNotFound;
+        if (bytes_read != stat.size) {
+            allocator.free(pdf_bytes);
+            return Error.FileNotFound;
         }
-        return .{ .handle = handle };
+
+        // Load from memory buffer - PDFium references this buffer, doesn't copy it
+        const handle = l.FPDF_LoadMemDocument(
+            pdf_bytes.ptr,
+            @intCast(pdf_bytes.len),
+            null,
+        ) orelse {
+            allocator.free(pdf_bytes);
+            return getLastError();
+        };
+
+        // Keep buffer alive for the document's lifetime
+        return .{ .handle = handle, .allocator = allocator, .pdf_buffer = pdf_bytes };
     }
 
-    /// Open a password-protected PDF document
-    pub fn openWithPassword(path: []const u8, password: []const u8) Error!Document {
+    /// Open a password-protected PDF document (loads entire file into memory)
+    pub fn openWithPassword(allocator: std.mem.Allocator, path: []const u8, password: []const u8) Error!Document {
         const l = lib orelse return Error.LibraryNotLoaded;
 
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (path.len >= path_buf.len) return Error.FileNotFound;
-        @memcpy(path_buf[0..path.len], path);
-        path_buf[path.len] = 0;
+        // Load entire PDF file into memory
+        const file = std.fs.cwd().openFile(path, .{}) catch return Error.FileNotFound;
+        defer file.close();
 
+        const stat = file.stat() catch return Error.FileNotFound;
+        const pdf_bytes = allocator.alloc(u8, stat.size) catch return Error.Unknown;
+        errdefer allocator.free(pdf_bytes);
+
+        const bytes_read = file.readAll(pdf_bytes) catch return Error.FileNotFound;
+        if (bytes_read != stat.size) {
+            allocator.free(pdf_bytes);
+            return Error.FileNotFound;
+        }
+
+        // Prepare null-terminated password
         var pass_buf: [256]u8 = undefined;
-        if (password.len >= pass_buf.len) return Error.PasswordRequired;
+        if (password.len >= pass_buf.len) {
+            allocator.free(pdf_bytes);
+            return Error.PasswordRequired;
+        }
         @memcpy(pass_buf[0..password.len], password);
         pass_buf[password.len] = 0;
 
-        const handle = l.FPDF_LoadDocument(&path_buf, &pass_buf);
-        if (handle == null) {
+        // Load from memory buffer with password - PDFium references this buffer, doesn't copy it
+        const handle = l.FPDF_LoadMemDocument(
+            pdf_bytes.ptr,
+            @intCast(pdf_bytes.len),
+            &pass_buf,
+        ) orelse {
+            allocator.free(pdf_bytes);
             return getLastError();
-        }
-        return .{ .handle = handle };
+        };
+
+        // Keep buffer alive for the document's lifetime
+        return .{ .handle = handle, .allocator = allocator, .pdf_buffer = pdf_bytes };
     }
 
     /// Close the document and release resources
@@ -233,6 +270,14 @@ pub const Document = struct {
                 l.FPDF_CloseDocument(self.handle);
             }
             self.handle = null;
+        }
+        // Free the PDF buffer if we own it
+        if (self.pdf_buffer) |buffer| {
+            if (self.allocator) |alloc| {
+                alloc.free(buffer);
+            }
+            self.pdf_buffer = null;
+            self.allocator = null;
         }
     }
 
@@ -568,6 +613,120 @@ pub const Document = struct {
         }
     }
 };
+
+/// Extended Metadata struct with document properties
+pub const ExtendedMetadata = struct {
+    // Metadata fields (same as Metadata struct)
+    title: ?[]u8 = null,
+    author: ?[]u8 = null,
+    subject: ?[]u8 = null,
+    keywords: ?[]u8 = null,
+    creator: ?[]u8 = null,
+    producer: ?[]u8 = null,
+    creation_date: ?[]u8 = null,
+    mod_date: ?[]u8 = null,
+
+    // Document properties
+    page_count: u32 = 0,
+    pdf_version: ?[]u8 = null,
+    encrypted: bool = false,
+    security_handler_revision: ?i32 = null,
+
+    pub fn deinit(self: *ExtendedMetadata, allocator: std.mem.Allocator) void {
+        if (self.title) |t| allocator.free(t);
+        if (self.author) |a| allocator.free(a);
+        if (self.subject) |s| allocator.free(s);
+        if (self.keywords) |k| allocator.free(k);
+        if (self.creator) |c| allocator.free(c);
+        if (self.producer) |p| allocator.free(p);
+        if (self.creation_date) |cd| allocator.free(cd);
+        if (self.mod_date) |md| allocator.free(md);
+        if (self.pdf_version) |v| allocator.free(v);
+        self.* = .{};
+    }
+};
+
+/// Extract metadata from PDF in memory buffer
+pub fn extractMetadataFromMemory(
+    allocator: std.mem.Allocator,
+    pdf_bytes: []const u8,
+    password: ?[]const u8,
+) !ExtendedMetadata {
+    const l = lib orelse return Error.LibraryNotLoaded;
+
+    // Prepare null-terminated password if provided
+    var pass_buf: [256]u8 = undefined;
+    const pwd_ptr: ?[*:0]const u8 = if (password) |pwd| blk: {
+        if (pwd.len >= pass_buf.len) return Error.PasswordRequired;
+        @memcpy(pass_buf[0..pwd.len], pwd);
+        pass_buf[pwd.len] = 0;
+        break :blk @ptrCast(&pass_buf);
+    } else null;
+
+    // Open PDF from memory
+    const doc_handle = l.FPDF_LoadMemDocument(
+        pdf_bytes.ptr,
+        @intCast(pdf_bytes.len),
+        pwd_ptr,
+    ) orelse return getLastError();
+    defer l.FPDF_CloseDocument(doc_handle);
+
+    var metadata = ExtendedMetadata{};
+    errdefer metadata.deinit(allocator);
+
+    // Extract standard metadata
+    metadata.title = getMetaTextFromHandle(allocator, &l, doc_handle, "Title");
+    metadata.author = getMetaTextFromHandle(allocator, &l, doc_handle, "Author");
+    metadata.subject = getMetaTextFromHandle(allocator, &l, doc_handle, "Subject");
+    metadata.keywords = getMetaTextFromHandle(allocator, &l, doc_handle, "Keywords");
+    metadata.creator = getMetaTextFromHandle(allocator, &l, doc_handle, "Creator");
+    metadata.producer = getMetaTextFromHandle(allocator, &l, doc_handle, "Producer");
+    metadata.creation_date = getMetaTextFromHandle(allocator, &l, doc_handle, "CreationDate");
+    metadata.mod_date = getMetaTextFromHandle(allocator, &l, doc_handle, "ModDate");
+
+    // Extract document properties
+    metadata.page_count = @intCast(l.FPDF_GetPageCount(doc_handle));
+
+    var pdf_version: c_int = 0;
+    if (l.FPDF_GetFileVersion(doc_handle, &pdf_version) != 0) {
+        metadata.pdf_version = try std.fmt.allocPrint(
+            allocator,
+            "{d}.{d}",
+            .{ @divFloor(pdf_version, 10), @mod(pdf_version, 10) },
+        );
+    }
+
+    const security_revision = l.FPDF_GetSecurityHandlerRevision(doc_handle);
+    metadata.encrypted = security_revision != -1;
+    if (metadata.encrypted) {
+        metadata.security_handler_revision = security_revision;
+    }
+
+    return metadata;
+}
+
+/// Helper to get metadata text from document handle
+fn getMetaTextFromHandle(
+    allocator: std.mem.Allocator,
+    l: *const loader.PdfiumLib,
+    doc: loader.FPDF_DOCUMENT,
+    tag: []const u8,
+) ?[]u8 {
+    var tag_buf: [64]u8 = undefined;
+    if (tag.len >= tag_buf.len) return null;
+    @memcpy(tag_buf[0..tag.len], tag);
+    tag_buf[tag.len] = 0;
+
+    const required_len = l.FPDF_GetMetaText(doc, &tag_buf, null, 0);
+    if (required_len <= 2) return null;
+
+    const utf16_buf = allocator.alloc(u16, required_len / 2) catch return null;
+    defer allocator.free(utf16_buf);
+
+    _ = l.FPDF_GetMetaText(doc, &tag_buf, @ptrCast(utf16_buf.ptr), required_len);
+
+    return utf16LeToUtf8(allocator, utf16_buf[0 .. (required_len / 2) - 1]);
+}
 
 /// A PDF page handle
 pub const Page = struct {

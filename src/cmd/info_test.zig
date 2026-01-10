@@ -105,7 +105,7 @@ test "info: page count verification" {
         const local_path = try getTestFilePath(allocator, tf.path);
         defer allocator.free(local_path);
 
-        var doc = pdfium.Document.open(local_path) catch |err| {
+        var doc = pdfium.Document.open(allocator, local_path) catch |err| {
             std.debug.print("Failed to open {s}: {}\n", .{ tf.path, err });
             return err;
         };
@@ -132,11 +132,11 @@ test "info: encrypted detection" {
 
         if (tf.encrypted) {
             // Encrypted files should fail to open without password
-            const result = pdfium.Document.open(local_path);
+            const result = pdfium.Document.open(allocator, local_path);
             try std.testing.expectError(pdfium.Error.PasswordRequired, result);
         } else {
             // Non-encrypted files should open successfully
-            var doc = pdfium.Document.open(local_path) catch |err| {
+            var doc = pdfium.Document.open(allocator, local_path) catch |err| {
                 std.debug.print("Failed to open non-encrypted {s}: {}\n", .{ tf.path, err });
                 return err;
             };
@@ -159,7 +159,7 @@ test "info: metadata retrieval" {
     const local_path = try getTestFilePath(allocator, "001-trivial/minimal-document.pdf");
     defer allocator.free(local_path);
 
-    var doc = try pdfium.Document.open(local_path);
+    var doc = try pdfium.Document.open(allocator, local_path);
     defer doc.close();
 
     // Should be able to get metadata (even if some fields are null)
@@ -184,7 +184,7 @@ test "info: file version" {
     const local_path = try getTestFilePath(allocator, "001-trivial/minimal-document.pdf");
     defer allocator.free(local_path);
 
-    var doc = try pdfium.Document.open(local_path);
+    var doc = try pdfium.Document.open(allocator, local_path);
     defer doc.close();
 
     // Should be able to get PDF version
@@ -209,7 +209,7 @@ test "info: image objects detection" {
         const local_path = try getTestFilePath(allocator, "003-pdflatex-image/pdflatex-image.pdf");
         defer allocator.free(local_path);
 
-        var doc = try pdfium.Document.open(local_path);
+        var doc = try pdfium.Document.open(allocator, local_path);
         defer doc.close();
 
         var page = try doc.loadPage(0);
@@ -231,7 +231,7 @@ test "info: image objects detection" {
         const local_path = try getTestFilePath(allocator, "001-trivial/minimal-document.pdf");
         defer allocator.free(local_path);
 
-        var doc = try pdfium.Document.open(local_path);
+        var doc = try pdfium.Document.open(allocator, local_path);
         defer doc.close();
 
         var page = try doc.loadPage(0);
@@ -260,7 +260,7 @@ test "info: multi-page document" {
     const local_path = try getTestFilePath(allocator, "004-pdflatex-4-pages/pdflatex-4-pages.pdf");
     defer allocator.free(local_path);
 
-    var doc = try pdfium.Document.open(local_path);
+    var doc = try pdfium.Document.open(allocator, local_path);
     defer doc.close();
 
     try std.testing.expectEqual(@as(u32, 4), doc.getPageCount());

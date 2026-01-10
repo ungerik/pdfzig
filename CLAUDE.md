@@ -57,23 +57,41 @@ Run the built executable directly:
 - **src/main.zig** - CLI entry point with subcommand dispatch
 - **src/cli_parsing.zig** - CLI argument parsing utilities and shared types
 - **src/cmd/** - Command implementations (one file per command)
-- **src/pdfium/** - PDFium bindings and library management
+- **src/pdf/** - Library-independent PDF metadata module (MetaData struct, XMP parsing, PDF/A detection)
+- **src/pdfium/** - PDFium bindings and library management (memory-based loading)
 - **src/pdfcontent/** - PDF content generation (images, text formatting)
 
 ### Core Modules
 
 - **src/main.zig** - CLI entry point with subcommand parsing (render, extract_text, extract_images, extract_attachments, visual_diff, info, rotate, mirror, delete, add, create, attach, detach, download_pdfium). Global option `--link <path>` loads PDFium from a specific path.
 
+- **src/pdf/metadata.zig** - Library-independent metadata extraction combining PDFium and XMP parsing:
+  - `MetaData` - Generic metadata struct with standard PDF metadata and PDF/A conformance
+  - `parseInfo()` - Main API that loads entire PDF into memory, extracts metadata from PDFium and XMP, returns combined result
+  - `parsePdfA()` - Extract only PDF/A conformance from PDF byte stream
+  - `PdfAConformance` - PDF/A conformance level (part 1-4, level a/b/u/e/f) with custom formatter
+
+- **src/pdf/loader.zig** - PDF file loading utilities:
+  - `loadPdfFile()` - Load entire PDF file into memory buffer
+
+- **src/pdf/xmp.zig** - XMP metadata parser for PDF/A conformance detection:
+  - `extractPdfAConformance()` - Parse PDF byte stream to find XMP packet and extract PDF/A conformance
+  - Supports both element syntax (`<pdfaid:part>1</pdfaid:part>`) and attribute syntax (`pdfaid:part="1"`)
+  - No XML library dependency - uses simple string matching (PDF/A spec requires XMP to be uncompressed/unencrypted)
+
 - **src/pdfium/pdfium.zig** - Idiomatic Zig bindings for PDFium. Key types:
-  - `Document` - PDF document handle with metadata, attachment access, page deletion, and save functionality
+  - `Document` - PDF document handle with metadata, attachment access, page deletion, and save functionality. Owns the PDF buffer for the document's lifetime (loaded via `FPDF_LoadMemDocument`). The buffer is freed in `close()`.
   - `Page` - Page handle with rendering, rotation, and object iteration
   - `TextPage` - Text extraction with UTF-16LE to UTF-8 conversion
   - `Bitmap` - BGRA bitmap for rendering
   - `ImageObject` / `ImageObjectIterator` - Embedded image extraction
   - `Attachment` / `AttachmentIterator` - Embedded file attachment access
+  - `ExtendedMetadata` - PDFium metadata with document properties (page count, PDF version, encryption)
+  - `extractMetadataFromMemory()` - Extract metadata from PDF in memory buffer
 
 - **src/pdfium/loader.zig** - Runtime dynamic library loading infrastructure:
   - `PdfiumLib` struct with function pointers for all PDFium APIs
+  - Uses `FPDF_LoadMemDocument` exclusively - all PDFs loaded into memory first
   - Version detection from filename pattern `libpdfium_v{BUILD}.{ext}`
   - `findBestPdfiumLibrary()` - finds highest version in executable directory
 
@@ -143,6 +161,11 @@ Run the built executable directly:
 
 ## Key Implementation Details
 
+- **Memory-first loading**: All PDF operations load the entire file into memory first using `FPDF_LoadMemDocument`. This enables buffer reuse between PDFium and XMP parsing, and provides a foundation for future optimizations. `FPDF_LoadDocument` has been removed.
+- **Document memory management**: The `Document` struct owns the PDF buffer for the document's lifetime. PDFium's `FPDF_LoadMemDocument` references the buffer without copying, so the buffer must remain valid until `FPDF_CloseDocument` is called. The `Document.close()` method frees both the PDFium handle and the owned buffer.
+- **WebUI memory optimization**: WebUI keeps two copies of each PDF (`doc_original` with original bytes, `doc` for modifications). When downloading an unmodified document, the original bytes are served directly from `doc_original.pdf_buffer` without creating a new PDF, preserving the exact original file including signatures.
+- **PDF/A detection**: Automatically detects PDF/A conformance by parsing XMP metadata directly from the PDF byte stream. Uses simple string matching (no XML library) since PDF/A requires XMP to be uncompressed and unencrypted.
+- **Library-independent metadata**: The `src/pdf/` module provides a generic `MetaData` struct that combines PDFium metadata with XMP-derived PDF/A conformance, abstracting implementation details.
 - PDFium outputs BGRA; conversion to RGBA (PNG) or RGB (JPEG) happens in pdfcontent/images.zig
 - PDFium uses UTF-16LE for text; conversion to UTF-8 is in pdfium/pdfium.zig
 - Page numbers in CLI are 1-based; PDFium API uses 0-based internally

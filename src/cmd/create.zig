@@ -124,7 +124,7 @@ pub fn run(
 
             if (std.mem.eql(u8, ext_lower, ".pdf")) {
                 // Import pages from PDF
-                var src_doc = pdfium.Document.open(source.path) catch |err| {
+                var src_doc = pdfium.Document.open(allocator, source.path) catch |err| {
                     try stderr.print("Error opening PDF {s}: {}\n", .{ source.path, err });
                     try stderr.flush();
                     std.process.exit(1);

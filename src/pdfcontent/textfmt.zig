@@ -757,7 +757,7 @@ test "roundtrip: create PDF from JSON and extract text" {
     try doc.save(tmp_path);
 
     // Re-open the saved PDF
-    var doc2 = try pdfium.Document.open(tmp_path);
+    var doc2 = try pdfium.Document.open(allocator, tmp_path);
     defer doc2.close();
 
     // Verify page count

@@ -104,7 +104,7 @@ pub const PdfiumLib = struct {
     FPDF_GetLastError: *const fn () callconv(.c) c_ulong,
 
     // Document functions
-    FPDF_LoadDocument: *const fn (file_path: FPDF_STRING, password: FPDF_STRING) callconv(.c) FPDF_DOCUMENT,
+    FPDF_LoadMemDocument: *const fn (data_buf: ?*const anyopaque, size: c_int, password: FPDF_STRING) callconv(.c) FPDF_DOCUMENT,
     FPDF_CloseDocument: *const fn (document: FPDF_DOCUMENT) callconv(.c) void,
     FPDF_GetPageCount: *const fn (document: FPDF_DOCUMENT) callconv(.c) c_int,
     FPDF_GetFileVersion: *const fn (document: FPDF_DOCUMENT, fileVersion: *c_int) callconv(.c) FPDF_BOOL,

@@ -133,10 +133,10 @@ pub fn run(
     }
 
     // Open both documents
-    var doc1 = main.openDocument(input1, args.password1, stderr) orelse std.process.exit(1);
+    var doc1 = main.openDocument(allocator, input1, args.password1, stderr) orelse std.process.exit(1);
     defer doc1.close();
 
-    var doc2 = main.openDocument(input2, args.password2, stderr) orelse std.process.exit(1);
+    var doc2 = main.openDocument(allocator, input2, args.password2, stderr) orelse std.process.exit(1);
     defer doc2.close();
 
     const page_count1 = doc1.getPageCount();

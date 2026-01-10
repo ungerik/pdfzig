@@ -50,16 +50,17 @@ pub fn requireInputPath(
 
 /// Open a PDF document with optional password, exit on error
 pub fn openDocumentOrExit(
+    allocator: std.mem.Allocator,
     path: []const u8,
     password: ?[]const u8,
     stderr: *std.Io.Writer,
 ) pdfium.Document {
     if (password) |pwd| {
-        return pdfium.Document.openWithPassword(path, pwd) catch |err| {
+        return pdfium.Document.openWithPassword(allocator, path, pwd) catch |err| {
             exitWithError(stderr, "Error opening PDF: {}\n", .{err});
         };
     } else {
-        return pdfium.Document.open(path) catch |err| {
+        return pdfium.Document.open(allocator, path) catch |err| {
             if (err == pdfium.Error.PasswordRequired) {
                 exitWithErrorMsg(stderr, "Error: PDF is password protected. Use -P to provide password.\n");
             } else {
@@ -180,6 +181,7 @@ pub fn completeTempFileEdit(ctx: TempFileContext, stderr: *std.Io.Writer) void {
 
 /// High-level wrapper for temp file operations with document save
 pub fn withTempFileForInPlaceEdit(
+    allocator: std.mem.Allocator,
     input_path: []const u8,
     output_path: ?[]const u8,
     password: ?[]const u8,
@@ -189,7 +191,7 @@ pub fn withTempFileForInPlaceEdit(
 ) !void {
     const ctx = setupTempFileForInPlaceEdit(input_path, output_path, stderr);
 
-    var doc = openDocumentOrExit(input_path, password, stderr);
+    var doc = openDocumentOrExit(allocator, input_path, password, stderr);
     defer doc.close();
 
     // Process the document

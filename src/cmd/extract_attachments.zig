@@ -78,7 +78,7 @@ pub fn run(
     }
 
     // Open document
-    var doc = main.openDocument(input_path, args.password, stderr) orelse std.process.exit(1);
+    var doc = main.openDocument(allocator, input_path, args.password, stderr) orelse std.process.exit(1);
     defer doc.close();
 
     const attachment_count = doc.getAttachmentCount();

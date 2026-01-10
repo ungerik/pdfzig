@@ -96,7 +96,7 @@ pub fn run(
     shared.createOutputDirectory(args.output_dir, stderr);
 
     // Open document
-    var doc = main.openDocument(input_path, args.password, stderr) orelse std.process.exit(1);
+    var doc = main.openDocument(allocator, input_path, args.password, stderr) orelse std.process.exit(1);
     defer doc.close();
 
     const page_count = doc.getPageCount();

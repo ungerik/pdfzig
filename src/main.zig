@@ -233,15 +233,15 @@ pub fn main() !void {
 // Helper Functions
 // ============================================================================
 
-pub fn openDocument(path: []const u8, password: ?[]const u8, stderr: *std.Io.Writer) ?pdfium.Document {
+pub fn openDocument(allocator: std.mem.Allocator, path: []const u8, password: ?[]const u8, stderr: *std.Io.Writer) ?pdfium.Document {
     if (password) |pwd| {
-        return pdfium.Document.openWithPassword(path, pwd) catch |err| {
+        return pdfium.Document.openWithPassword(allocator, path, pwd) catch |err| {
             stderr.print("Error: {}\n", .{err}) catch {};
             stderr.flush() catch {};
             return null;
         };
     } else {
-        return pdfium.Document.open(path) catch |err| {
+        return pdfium.Document.open(allocator, path) catch |err| {
             if (err == pdfium.Error.PasswordRequired) {
                 stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n") catch {};
             } else {

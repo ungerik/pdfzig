@@ -242,11 +242,10 @@ pub const DocumentState = struct {
     filepath: []const u8, // file path (may be temp file for uploaded PDFs)
     filename: []const u8, // display name
     doc: pdfium.Document, // MODIFIED document (current state with transformations)
-    doc_original: pdfium.Document, // ORIGINAL document (immutable, for revert)
+    doc_original: pdfium.Document, // ORIGINAL document (immutable, for revert, owns original PDF bytes)
     pages: std.array_list.Managed(PageState),
     color: [3]u8, // RGB background color for UI display
     modified: bool = false, // has any modification been made?
-    original_bytes: ?[]u8, // original PDF bytes for additional backup, owned by this struct
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *DocumentState) void {
@@ -255,17 +254,18 @@ pub const DocumentState = struct {
         }
         self.pages.deinit();
 
-        // Close both document copies
+        // Close both document copies (they own their respective PDF buffers)
         self.doc.close();
         self.doc_original.close();
-
-        if (self.original_bytes) |bytes| {
-            self.allocator.free(bytes);
-        }
 
         self.allocator.free(self.filepath);
 
         self.allocator.free(self.filename);
+    }
+
+    /// Get the original PDF bytes (owned by doc_original)
+    pub fn getOriginalBytes(self: *const DocumentState) ?[]const u8 {
+        return self.doc_original.pdf_buffer;
     }
 };
 
@@ -321,19 +321,13 @@ pub const GlobalState = struct {
         self.lock();
         defer self.unlock();
 
-        // Open original PDF (immutable copy)
-        var doc_original = try pdfium.Document.open(filepath);
+        // Open original PDF (immutable copy) - owns original PDF bytes
+        var doc_original = try pdfium.Document.open(self.allocator, filepath);
         errdefer doc_original.close();
 
-        // Open working PDF copy (for modifications)
-        var doc = try pdfium.Document.open(filepath);
+        // Open working PDF copy (for modifications) - owns working PDF bytes
+        var doc = try pdfium.Document.open(self.allocator, filepath);
         errdefer doc.close();
-
-        // Read original bytes for additional backup/revert functionality
-        const file = try std.fs.cwd().openFile(filepath, .{});
-        defer file.close();
-        const original_bytes = try file.readToEndAlloc(self.allocator, 100 * 1024 * 1024);
-        errdefer self.allocator.free(original_bytes);
 
         // Create document state
         const doc_state = try self.allocator.create(DocumentState);
@@ -357,7 +351,6 @@ pub const GlobalState = struct {
             .doc_original = doc_original,
             .pages = std.array_list.Managed(PageState).init(self.allocator),
             .color = generateDocumentColor(doc_id),
-            .original_bytes = original_bytes,
             .allocator = self.allocator,
         };
         errdefer doc_state.deinit();
