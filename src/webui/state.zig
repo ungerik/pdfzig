@@ -152,11 +152,20 @@ pub const PageModification = struct {
         self.current_version = 0;
     }
 
-    /// Revert to a specific version
+    /// Revert to a specific version and truncate history
+    /// This clears all versions after target_version, so new modifications start fresh
     pub fn revertToVersion(self: *PageModification, target_version: u32) !void {
         if (target_version >= self.history.items.len) {
             return error.VersionNotFound;
         }
+
+        // Free memory for versions being removed
+        while (self.history.items.len > target_version + 1) {
+            const last_idx = self.history.items.len - 1;
+            self.history.items[last_idx].deinit(self.allocator);
+            _ = self.history.pop();
+        }
+
         self.current_version = target_version;
     }
 

@@ -171,6 +171,8 @@ const pageVersionStates = new Map();
 const pageCurrentVersion = new Map();
 // pageId -> original dimensions
 const pageOriginalDimensions = new Map();
+// pageId -> pending operation flag (prevents concurrent operations)
+const pagePendingOperations = new Map();
 
 /**
  * Initialize page state from server data
@@ -455,11 +457,20 @@ function getPageStateForOperation(pageId) {
  * @param {string} params.errorMessage - Error message to show on failure
  */
 async function applyPageTransformation(pageId, params) {
+    // Check if operation is already pending for this page (prevent race conditions)
+    if (pagePendingOperations.get(pageId)) {
+        console.log('Operation already in progress for page:', pageId);
+        return;
+    }
+
     const state = getPageStateForOperation(pageId);
     if (!state) return;
 
     const { card, history, currentVersion, originalDims, currentState } = state;
     const { transformMatrix, operation, requestBody, errorMessage } = params;
+
+    // Mark operation as pending
+    pagePendingOperations.set(pageId, true);
 
     // Calculate new matrix locally
     const newMatrix = multiplyMatrices(currentState.matrix, transformMatrix);
@@ -518,6 +529,8 @@ async function applyPageTransformation(pageId, params) {
         console.error('Operation error:', err);
         showErrorMessage(errorMessage);
     } finally {
+        // Clear pending flag
+        pagePendingOperations.delete(pageId);
         hideLoadingSpinner(card);
     }
 }
@@ -635,6 +648,12 @@ function updateThumbnail(card, pageId) {
 }
 
 async function deletePage(pageId) {
+    // Check if operation is already pending for this page
+    if (pagePendingOperations.get(pageId)) {
+        console.log('Operation already in progress for page:', pageId);
+        return;
+    }
+
     const card = document.querySelector(`.page-card-outer[data-page-id="${pageId}"]`);
     if (!card) return;
 
@@ -645,6 +664,9 @@ async function deletePage(pageId) {
         console.error('Page state not initialized for:', pageId);
         return;
     }
+
+    // Mark operation as pending
+    pagePendingOperations.set(pageId, true);
 
     const currentState = history[currentVersion];
 
@@ -717,13 +739,24 @@ async function deletePage(pageId) {
         console.error('Delete error:', err);
         showErrorMessage('Failed to delete/undelete page. Please try again.');
     } finally {
+        // Clear pending flag
+        pagePendingOperations.delete(pageId);
         hideLoadingSpinner(card);
     }
 }
 
 async function revertPage(pageId) {
+    // Check if operation is already pending for this page
+    if (pagePendingOperations.get(pageId)) {
+        console.log('Operation already in progress for page:', pageId);
+        return;
+    }
+
     const card = document.querySelector(`.page-card-outer[data-page-id="${pageId}"]`);
     if (!card) return;
+
+    // Mark operation as pending
+    pagePendingOperations.set(pageId, true);
 
     // Store previous state for rollback
     const history = pageVersionStates.get(pageId);
@@ -834,16 +867,22 @@ async function revertPage(pageId) {
                         console.error('Failed to reinitialize page state after reset:', err);
                     }
 
+                    // Clear pending flag
+                    pagePendingOperations.delete(pageId);
                     hideLoadingSpinner(card);
                     updateResetButtonState();
                     updateClearButtonConfirmation();
                 };
                 tempImg.onerror = () => {
                     console.error('Failed to load reverted thumbnail');
+                    // Clear pending flag
+                    pagePendingOperations.delete(pageId);
                     hideLoadingSpinner(card);
                 };
                 tempImg.src = newSrc;
             } else {
+                // Clear pending flag
+                pagePendingOperations.delete(pageId);
                 hideLoadingSpinner(card);
             }
         } else {
@@ -878,6 +917,8 @@ async function revertPage(pageId) {
         card.style.height = previousOuterStyles.height;
         card.setAttribute('data-deleted', wasDeleted ? 'true' : 'false');
         card.setAttribute('data-modified', wasModified ? 'true' : 'false');
+        // Clear pending flag
+        pagePendingOperations.delete(pageId);
         hideLoadingSpinner(card);
     }
 }
