@@ -29,12 +29,16 @@ fn bakeTransformationsToPage(
     orig_width: f64,
     orig_height: f64,
 ) BakeTransformError!void {
-    // Apply matrix to all page objects
+    // When baking transformations to PDF objects, we need to use the inverse matrix
+    // because we're transforming the objects, not the viewport
+    const inv_matrix = matrix.inverse() orelse return BakeTransformError.GenerateContentFailed;
+
+    // Apply inverse matrix to all page objects
     const object_count = page.getObjectCount();
     var i: u32 = 0;
     while (i < object_count) : (i += 1) {
         if (page.getObject(i)) |obj| {
-            obj.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+            obj.transform(inv_matrix.a, inv_matrix.b, inv_matrix.c, inv_matrix.d, inv_matrix.e, inv_matrix.f);
         }
     }
 
@@ -828,7 +832,7 @@ fn renderPageCardHTML(writer: anytype, page: *const PageState, allocator: std.me
 
     try writer.print(
         \\<div class="page-card-outer no-transition" data-page-id="{s}" data-deleted="{s}" data-modified="{s}" data-version="{d}" draggable="true" style="position: relative; display: inline-block;">
-        \\  <div class="page-card-inner no-transition" onclick="openModal('/api/pages/{s}/fullsize?dpi=150')" style="position: relative;">
+        \\  <div class="page-card-inner no-transition" onclick="openModal('/api/pages/{s}/fullsize?dpi=150&v={d}')" style="position: relative;">
         \\    <img class="page-thumbnail" src="/api/pages/{s}/thumbnail?v={d}" alt="Page {d}">
         \\  </div>
         \\  <div class="page-overlay">
@@ -842,7 +846,7 @@ fn renderPageCardHTML(writer: anytype, page: *const PageState, allocator: std.me
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 100 12h3" />
         \\      </svg>
         \\    </button>
-        \\    <button onclick="event.stopPropagation(); openModal('/api/pages/{s}/fullsize?dpi=150');" class="btn btn-round" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(107, 114, 128, 0.8);" title="Zoom / Preview">
+        \\    <button onclick="event.stopPropagation(); openModal('/api/pages/{s}/fullsize?dpi=150&v={d}');" class="btn btn-round" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(107, 114, 128, 0.8);" title="Zoom / Preview">
         \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607zM10.5 7.5v6m3-3h-6" />
         \\      </svg>
@@ -877,12 +881,14 @@ fn renderPageCardHTML(writer: anytype, page: *const PageState, allocator: std.me
         modified_attr,
         page.modifications.current_version,
         page_id_str,
+        page.modifications.current_version, // version for first fullsize URL
         page_id_str,
         page.modifications.current_version,
         page.original_index + 1,
         page_id_str,
         page_id_str,
         page_id_str,
+        page.modifications.current_version, // version for second fullsize URL
         page_id_str,
         page_id_str,
         page_id_str,

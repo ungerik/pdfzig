@@ -69,6 +69,30 @@ pub const Matrix = struct {
             @abs(self.f) < epsilon;
     }
 
+    /// Calculate inverse matrix
+    /// Returns null if matrix is not invertible (determinant is zero)
+    pub fn inverse(self: Matrix) ?Matrix {
+        // Calculate determinant
+        const det = self.a * self.d - self.b * self.c;
+
+        // Check if matrix is invertible
+        const epsilon = 1e-10;
+        if (@abs(det) < epsilon) {
+            return null;
+        }
+
+        const inv_det = 1.0 / det;
+
+        return .{
+            .a = self.d * inv_det,
+            .b = -self.b * inv_det,
+            .c = -self.c * inv_det,
+            .d = self.a * inv_det,
+            .e = (self.c * self.f - self.d * self.e) * inv_det,
+            .f = (self.b * self.e - self.a * self.f) * inv_det,
+        };
+    }
+
     /// Calculate resulting dimensions after applying this matrix
     /// Returns the bounding box of the transformed page
     pub fn transformDimensions(self: Matrix, width: f64, height: f64) struct { width: f64, height: f64 } {
