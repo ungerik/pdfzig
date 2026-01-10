@@ -82,7 +82,7 @@ Output specification format: `DPI:FORMAT:QUALITY:TEMPLATE`
 
 ### Extract Text
 
-Extract text content from PDF pages in plain text or structured JSON format. Customize page separators with template variables and escape sequences.
+Extract text content from PDF pages in plain text or structured JSON format. By default, pages are separated by a single newline. Add custom separators with template variables and escape sequences using `--page-separator`.
 
 ```bash
 # Print text to stdout
@@ -100,14 +100,14 @@ pdfzig extract_text --format json document.pdf
 # Save JSON to file
 pdfzig extract_text -f json -o output.json document.pdf
 
-# Custom page separator with page number
-pdfzig extract_text --page-separator "=== Page {{PAGE_NO}} ===" document.pdf
+# Add page separator with page number
+pdfzig extract_text --page-separator "--- Page {{PAGE_NO}} ---" document.pdf
 
-# No separator (just newline between pages)
+# Add extra newline between pages
 pdfzig extract_text --page-separator "" document.pdf
 
-# Separator with escape sequences
-pdfzig extract_text --page-separator '\n--- Page {{PAGE_NO}} ---\n' document.pdf
+# Separator with escape sequences (multiple newlines)
+pdfzig extract_text --page-separator '\n\n=== Page {{PAGE_NO}} ===\n\n' document.pdf
 ```
 
 #### JSON Output Format

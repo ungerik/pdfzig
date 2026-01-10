@@ -131,29 +131,21 @@ pub fn run(
                 if (text_page.getText(allocator)) |text| {
                     defer allocator.free(text);
 
-                    // Print page separator (only if not first page and multi-page document)
-                    if (!first_page and page_count > 1) {
+                    // Print page separator (only if explicitly specified and not first page)
+                    if (!first_page) {
                         if (args.page_separator) |sep| {
-                            // User specified a separator (could be empty string)
                             if (sep.len > 0) {
                                 // Replace {{PAGE_NO}} with actual page number
                                 try printPageSeparator(allocator, output, sep, page_num);
                             } else {
-                                // Empty string = just newline
+                                // Empty string = just extra newline
                                 try output.writeAll("\n");
                             }
-                        } else {
-                            // Default separator
-                            try output.print("--- Page {d} ---\n", .{page_num});
                         }
                     }
 
                     try output.writeAll(text);
-                    if (first_page or args.page_separator != null) {
-                        try output.writeAll("\n");
-                    } else {
-                        try output.writeAll("\n\n");
-                    }
+                    try output.writeAll("\n");
                     first_page = false;
                 }
             }
@@ -244,11 +236,11 @@ pub fn printUsage(stdout: *std.Io.Writer) void {
         \\  -f, --format <FMT>         Output format: text (default) or json
         \\  -p, --pages <RANGE>        Page range, e.g., "1-5,8,10-12" (default: all)
         \\  -P, --password <PW>        Password for encrypted PDFs
-        \\  --page-separator <SEP>     Custom page separator (text format only)
+        \\  --page-separator <SEP>     Page separator between pages (text format only)
         \\                             Use {{PAGE_NO}} for page number placeholder
         \\                             Supports escape sequences: \n \t \r \\
-        \\                             Empty string "" = no separator, just newline
-        \\                             Default: "--- Page {{PAGE_NO}} ---"
+        \\                             Empty string "" = extra newline between pages
+        \\                             Default: no separator (pages separated by newline)
         \\  -h, --help                 Show this help message
         \\
         \\Examples:
