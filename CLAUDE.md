@@ -192,3 +192,7 @@ Run the built executable directly:
 
 - Encode simple request parameters in the URL path and avoid JSON body payloads
 - Use JSON for complex requests or responses
+
+## Version Control
+
+- Don't create git commits automatically. Ask the user to create a commit.

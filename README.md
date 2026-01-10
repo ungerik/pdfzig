@@ -103,9 +103,6 @@ pdfzig extract_text -f json -o output.json document.pdf
 # Add page separator with page number
 pdfzig extract_text --page-separator "--- Page {{PAGE_NO}} ---" document.pdf
 
-# Add extra newline between pages
-pdfzig extract_text --page-separator "" document.pdf
-
 # Separator with escape sequences (multiple newlines)
 pdfzig extract_text --page-separator '\n\n=== Page {{PAGE_NO}} ===\n\n' document.pdf
 ```
