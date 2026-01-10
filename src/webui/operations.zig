@@ -181,6 +181,16 @@ pub fn revertPage(
     doc_id: u32,
     page_index: u32,
 ) !void {
+    return revertPageToVersion(state, doc_id, page_index, 0);
+}
+
+/// Revert a page to a specific version
+pub fn revertPageToVersion(
+    state: *GlobalState,
+    doc_id: u32,
+    page_index: u32,
+    target_version: u32,
+) !void {
     state.lock();
     defer state.unlock();
 
@@ -189,8 +199,8 @@ pub fn revertPage(
 
     const page_state = &doc.pages.items[page_index];
 
-    // Reset to version 0 (original state)
-    page_state.modifications.reset();
+    // Revert to specified version
+    try page_state.modifications.revertToVersion(target_version);
 
     // Check if all pages are now in original state
     checkDocumentModificationStatus(doc);

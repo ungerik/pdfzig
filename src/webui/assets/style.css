@@ -283,6 +283,14 @@ body {
     transform: scale(1.1);
 }
 
+.page-overlay .btn-orange {
+    background-color: #f97316;
+}
+.page-overlay .btn-orange:hover {
+    background-color: #ea580c;
+    transform: scale(1.1);
+}
+
 /* Position variants */
 .page-overlay .btn-top-left {
     top: -1rem;

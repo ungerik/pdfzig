@@ -217,7 +217,10 @@ pub fn dispatch(
         } else if (std.mem.eql(u8, action, "revert")) {
             if (!is_post) return serveMethodNotAllowed(connection);
             if (readonly) return serveForbidden(connection);
-            return handleRevert(global_state, connection, page_id);
+            // Get version from next path segment
+            const version_str = parts.next() orelse return serveError(connection, .bad_request, "Missing version parameter");
+            const version = std.fmt.parseInt(u32, version_str, 10) catch return serveError(connection, .bad_request, "Invalid version");
+            return handleRevert(global_state, connection, page_id, version);
         } else if (std.mem.eql(u8, action, "download")) {
             return handlePageDownload(global_state, connection, page_id);
         } else if (std.mem.eql(u8, action, "fullsize")) {
@@ -758,7 +761,7 @@ fn renderPageCardHTML(writer: anytype, page: *const PageState, allocator: std.me
     defer allocator.free(mod_desc);
 
     try writer.print(
-        \\<div class="page-card-outer no-transition" data-page-id="{s}" data-deleted="{s}" data-modified="{s}" draggable="true" style="position: relative; display: inline-block;">
+        \\<div class="page-card-outer no-transition" data-page-id="{s}" data-deleted="{s}" data-modified="{s}" data-version="{d}" draggable="true" style="position: relative; display: inline-block;">
         \\  <div class="page-card-inner no-transition" onclick="openModal('/api/pages/{s}/fullsize?dpi=150')" style="position: relative;">
         \\    <img class="page-thumbnail" src="/api/pages/{s}/thumbnail?v={d}" alt="Page {d}">
         \\  </div>
@@ -806,6 +809,7 @@ fn renderPageCardHTML(writer: anytype, page: *const PageState, allocator: std.me
         page_id_str,
         deleted_attr,
         modified_attr,
+        page.modifications.current_version,
         page_id_str,
         page_id_str,
         page.modifications.current_version,
@@ -868,12 +872,38 @@ fn handleDelete(global_state: *GlobalState, connection: std.net.Server.Connectio
     try handlePageOperationAndRender(global_state, connection, page_id);
 }
 
-/// Handle revert page request - returns updated page card HTML
-fn handleRevert(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId) !void {
-    operations.revertPage(global_state, page_id.doc_id, page_id.page_num) catch {
+/// Handle revert page request - returns JSON response with version info
+fn handleRevert(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, target_version: u32) !void {
+    operations.revertPageToVersion(global_state, page_id.doc_id, page_id.page_num, target_version) catch {
         return serveError(connection, .internal_server_error, "Revert failed");
     };
-    try handlePageOperationAndRender(global_state, connection, page_id);
+
+    // Get updated state and return JSON response
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    global_state.lock();
+    defer global_state.unlock();
+
+    const doc = global_state.getDocument(page_id.doc_id) orelse {
+        return serveError(connection, .not_found, "Document not found");
+    };
+
+    if (page_id.page_num >= doc.pages.items.len) {
+        return serveError(connection, .not_found, "Page not found");
+    }
+
+    const page_state = &doc.pages.items[page_id.page_num];
+
+    const response = OperationResponse{
+        .success = true,
+        .version = page_state.modifications.current_version,
+        .document_modified = doc.modified,
+    };
+
+    const json_str = try stringifyJson(response, allocator);
+    try serveJson(connection, json_str);
 }
 
 /// Request structure for POST /api/pages/{id}/operation

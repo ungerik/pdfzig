@@ -498,6 +498,13 @@ async function applyPageTransformation(pageId, params) {
             pageCurrentVersion.set(pageId, newState.version);
             applyTransformToElement(pageId);
 
+            // Update version in DOM
+            card.setAttribute('data-version', data.version);
+            card.setAttribute('data-modified', 'true');
+
+            // Add reset button if not present
+            ensureResetButtonExists(pageId);
+
             const docId = pageId.split('-')[0];
             setDocumentModifiedState(docId, data.document_modified);
 
@@ -682,6 +689,12 @@ async function deletePage(pageId) {
             // Update UI - mark as deleted or undeleted
             card.setAttribute('data-deleted', newState.deleted ? 'true' : 'false');
             card.setAttribute('data-modified', newState.version > 0 ? 'true' : 'false');
+            card.setAttribute('data-version', data.version);
+
+            // Add reset button if modified
+            if (newState.version > 0) {
+                ensureResetButtonExists(pageId);
+            }
 
             // Update delete button title
             const deleteBtn = card.querySelector('.btn-red');
@@ -708,30 +721,80 @@ async function deletePage(pageId) {
     }
 }
 
-function revertPage(pageId) {
+async function revertPage(pageId) {
     const card = document.querySelector(`.page-card-outer[data-page-id="${pageId}"]`);
     if (!card) return;
 
+    // Store previous state for rollback
+    const history = pageVersionStates.get(pageId);
+    const currentVersion = pageCurrentVersion.get(pageId);
+    const previousHistory = history ? [...history] : null;
+    const previousVersion = currentVersion;
+    const inner = card.querySelector('.page-card-inner');
+    const previousInnerStyles = inner ? {
+        transform: inner.style.transform,
+        width: inner.style.width,
+        height: inner.style.height,
+        position: inner.style.position,
+        left: inner.style.left,
+        top: inner.style.top,
+        transformOrigin: inner.style.transformOrigin
+    } : null;
+    const previousOuterStyles = {
+        width: card.style.width,
+        height: card.style.height
+    };
+    const wasDeleted = card.getAttribute('data-deleted') === 'true';
+    const wasModified = card.getAttribute('data-modified') === 'true';
+
+    // Apply reset immediately (optimistic update)
+    pageVersionStates.delete(pageId);
+    pageCurrentVersion.delete(pageId);
+
+    // Reset all transform-related styles on inner element
+    if (inner) {
+        inner.style.transform = '';
+        inner.style.width = '';
+        inner.style.height = '';
+        inner.style.position = '';
+        inner.style.left = '';
+        inner.style.top = '';
+        inner.style.transformOrigin = '';
+    }
+
+    // Reset outer element dimensions
+    card.style.width = '';
+    card.style.height = '';
+
+    card.setAttribute('data-deleted', 'false');
+    card.setAttribute('data-modified', 'false');
+
     showLoadingSpinner(card);
 
-    fetch(`/api/pages/${pageId}/revert`, {
-        method: 'POST',
-        headers: {
-            'X-Session-ID': sessionId
-        }
-    }).then(response => response.json()).then(data => {
-        if (data.success) {
-            // Remove deleted and modified states
-            card.setAttribute('data-deleted', 'false');
-            card.setAttribute('data-modified', 'false');
+    try {
+        const response = await fetch(`/api/pages/${pageId}/revert/0`, {
+            method: 'POST',
+            headers: {
+                'X-Session-ID': sessionId
+            }
+        });
 
-            // Remove revert button if present
+        const data = await response.json();
+
+        if (data.success) {
+            // Server accepted - update version and remove buttons
+            card.setAttribute('data-version', data.version);
+
+            const resetBtn = card.querySelector('.btn-orange');
+            if (resetBtn) {
+                resetBtn.remove();
+            }
             const revertBtn = card.querySelector('.revert-btn');
             if (revertBtn) {
                 revertBtn.remove();
             }
 
-            // Update document modified state from backend
+            // Update document modified state
             const docId = pageId.split('-')[0];
             setDocumentModifiedState(docId, data.document_modified);
 
@@ -742,8 +805,35 @@ function revertPage(pageId) {
                 const newSrc = `/api/pages/${pageId}/thumbnail?v=${timestamp}`;
 
                 const tempImg = new Image();
-                tempImg.onload = () => {
+                tempImg.onload = async () => {
                     img.src = newSrc;
+
+                    // Reinitialize page state from server after reset
+                    try {
+                        const listData = await fetchJSON('/api/pages/list-json');
+
+                        // Find this specific page and reinitialize its state
+                        for (const doc of listData.documents) {
+                            for (const page of doc.pages) {
+                                if (page.id === pageId) {
+                                    const originalVersion = page.version_history[0];
+                                    if (originalVersion) {
+                                        initializePageState(
+                                            page.id,
+                                            page.version_history,
+                                            page.current_version,
+                                            originalVersion.width,
+                                            originalVersion.height
+                                        );
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Failed to reinitialize page state after reset:', err);
+                    }
+
                     hideLoadingSpinner(card);
                     updateResetButtonState();
                     updateClearButtonConfirmation();
@@ -757,13 +847,75 @@ function revertPage(pageId) {
                 hideLoadingSpinner(card);
             }
         } else {
-            console.error('Revert failed');
-            hideLoadingSpinner(card);
+            // Server rejected - rollback to previous state
+            console.error('Revert rejected by server');
+            rollbackRevertState();
+            showErrorMessage('Failed to reset page. Please try again.');
         }
-    }).catch(err => {
+    } catch (err) {
         console.error('Revert error:', err);
+        rollbackRevertState();
+        showErrorMessage('Failed to reset page. Please try again.');
+    }
+
+    function rollbackRevertState() {
+        if (previousHistory) {
+            pageVersionStates.set(pageId, previousHistory);
+        }
+        if (previousVersion !== undefined) {
+            pageCurrentVersion.set(pageId, previousVersion);
+        }
+        if (inner && previousInnerStyles) {
+            inner.style.transform = previousInnerStyles.transform;
+            inner.style.width = previousInnerStyles.width;
+            inner.style.height = previousInnerStyles.height;
+            inner.style.position = previousInnerStyles.position;
+            inner.style.left = previousInnerStyles.left;
+            inner.style.top = previousInnerStyles.top;
+            inner.style.transformOrigin = previousInnerStyles.transformOrigin;
+        }
+        card.style.width = previousOuterStyles.width;
+        card.style.height = previousOuterStyles.height;
+        card.setAttribute('data-deleted', wasDeleted ? 'true' : 'false');
+        card.setAttribute('data-modified', wasModified ? 'true' : 'false');
         hideLoadingSpinner(card);
-    });
+    }
+}
+
+// Reset page to initial state (same as revert - deletes all history and transformations)
+function resetPage(pageId) {
+    // Reset is the same as revert - both reset to version 0
+    revertPage(pageId);
+}
+
+// Ensure reset button exists for a modified page
+function ensureResetButtonExists(pageId) {
+    const card = document.querySelector(`.page-card-outer[data-page-id="${pageId}"]`);
+    if (!card) return;
+
+    const overlay = card.querySelector('.page-overlay');
+    if (!overlay) return;
+
+    // Check if reset button already exists
+    if (overlay.querySelector('.btn-orange')) return;
+
+    // Create reset button
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'btn btn-round btn-orange btn-top-center';
+    resetBtn.title = 'Reset to original';
+    resetBtn.onclick = function(e) {
+        e.stopPropagation();
+        resetPage(pageId);
+    };
+    resetBtn.innerHTML = '<svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>';
+
+    // Insert button after rotate-right button (or at beginning if not found)
+    const rotateRightBtn = overlay.querySelector('.btn-top-right');
+    if (rotateRightBtn) {
+        rotateRightBtn.insertAdjacentElement('afterend', resetBtn);
+    } else {
+        overlay.insertBefore(resetBtn, overlay.firstChild);
+    }
 }
 
 
@@ -1124,6 +1276,17 @@ window.addEventListener('load', () => {
     const pageCards = document.querySelectorAll('.page-card-outer');
     if (pageCards.length > 0) {
         loadPagesAndInitialize();
+
+        // Add reset buttons to already-modified pages
+        pageCards.forEach(card => {
+            const isModified = card.getAttribute('data-modified') === 'true';
+            if (isModified) {
+                const pageId = card.getAttribute('data-page-id');
+                if (pageId) {
+                    ensureResetButtonExists(pageId);
+                }
+            }
+        });
     }
 });
 

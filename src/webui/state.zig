@@ -152,6 +152,14 @@ pub const PageModification = struct {
         self.current_version = 0;
     }
 
+    /// Revert to a specific version
+    pub fn revertToVersion(self: *PageModification, target_version: u32) !void {
+        if (target_version >= self.history.items.len) {
+            return error.VersionNotFound;
+        }
+        self.current_version = target_version;
+    }
+
     /// Describe the current modifications
     pub fn describe(self: *const PageModification, allocator: std.mem.Allocator) ![]const u8 {
         if (self.isEmpty()) {
