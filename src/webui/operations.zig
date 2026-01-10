@@ -11,14 +11,27 @@ const Matrix = state_mod.Matrix;
 const page_renderer = @import("page_renderer.zig");
 
 /// Check if all pages in document are in their original state
-fn checkDocumentModificationStatus(doc: *DocumentState) void {
+pub fn checkDocumentModificationStatus(doc: *DocumentState) void {
     var has_modifications = false;
+
+    // Check if any page has modifications (transformations, deletions)
     for (doc.pages.items) |page| {
         if (!page.modifications.isEmpty()) {
             has_modifications = true;
             break;
         }
     }
+
+    // Check if pages are in original order
+    if (!has_modifications) {
+        for (doc.pages.items, 0..) |page, idx| {
+            if (page.original_index != idx) {
+                has_modifications = true;
+                break;
+            }
+        }
+    }
+
     doc.modified = has_modifications;
 }
 
@@ -215,7 +228,8 @@ pub fn reorderPages(
     // Insert at target position
     try doc.pages.insert(target_idx, page);
 
-    doc.modified = true;
+    // Check if document is now back in original state
+    checkDocumentModificationStatus(doc);
     state.notifyChange();
 }
 
@@ -259,7 +273,8 @@ pub fn resetAll(state: *GlobalState) !void {
             page_renderer.invalidateThumbnailCache(page, state.allocator);
         }
 
-        doc.modified = false;
+        // Check if document is back to original state (accounts for page order)
+        checkDocumentModificationStatus(doc);
     }
 
     state.notifyChange();

@@ -1391,7 +1391,8 @@ fn handleDeleteAllPages(global_state: *GlobalState, connection: std.net.Server.C
         }
     }
 
-    doc.modified = true;
+    // Check if document is modified (should be, but check for consistency)
+    operations.checkDocumentModificationStatus(doc);
     global_state.notifyChange();
 
     try serveJson(connection, "{\"success\":true}");
