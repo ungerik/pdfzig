@@ -11,6 +11,9 @@ const TARGET_PIXEL_COUNT = test_golden.TARGET_PIXEL_COUNT;
 const PIXEL_TOLERANCE = test_golden.PIXEL_TOLERANCE;
 
 test "render page bitmaps matches golden files" {
+    // Skip if PDFium is not available (without triggering download)
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     try pdfium.init();
@@ -86,6 +89,9 @@ test "render page bitmaps matches golden files" {
 }
 
 test "rotate 90 matches golden files" {
+    // Skip if PDFium is not available (without triggering download)
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     try pdfium.init();
@@ -156,6 +162,9 @@ test "rotate 90 matches golden files" {
 }
 
 test "rotate 180 matches golden files" {
+    // Skip if PDFium is not available (without triggering download)
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     try pdfium.init();
@@ -226,6 +235,9 @@ test "rotate 180 matches golden files" {
 }
 
 test "rotate 270 matches golden files" {
+    // Skip if PDFium is not available (without triggering download)
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     try pdfium.init();
@@ -296,6 +308,9 @@ test "rotate 270 matches golden files" {
 }
 
 test "mirror horizontal matches golden files" {
+    // Skip if PDFium is not available (without triggering download)
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     try pdfium.init();
@@ -373,6 +388,9 @@ test "mirror horizontal matches golden files" {
 }
 
 test "mirror vertical matches golden files" {
+    // Skip if PDFium is not available (without triggering download)
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     try pdfium.init();

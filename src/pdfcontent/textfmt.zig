@@ -655,6 +655,9 @@ test "StandardFont.name" {
 }
 
 test "roundtrip: create PDF from JSON and extract text" {
+    // Skip if PDFium is not available (without triggering download)
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     // Initialize PDFium

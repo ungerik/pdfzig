@@ -531,35 +531,54 @@ zig build all -Ddownload-pdfium
 zig build -Dtarget=x86_64-linux-gnu -Ddownload-pdfium
 ```
 
-### TODO: Integration Tests
+### Testing
 
-The following commands need integration tests with reference PDF files:
+Run the test suite:
 
-| Command                      | Tests Needed                                              |
-|------------------------------|-----------------------------------------------------------|
-| `render`                     | Render pages to PNG/JPEG, verify output dimensions/format |
-| `extract_text`               | Extract text, verify content matches expected output      |
-| `extract_images`             | Extract embedded images, verify count and format          |
-| `visual_diff`                | Compare identical/different PDFs, verify diff detection   |
-| `rotate`                     | Rotate pages, verify rotation persists after save         |
-| `mirror`                     | Mirror pages horizontally/vertically, verify transform    |
-| `delete`                     | Delete pages, verify page count and remaining content     |
-| `add`                        | Add blank/image/text pages, verify insertion              |
-| `create`                     | Create from multiple sources, verify page import/ordering |
-| `attach`                     | Add attachments, verify attachment count and content      |
-| `detach`                     | Remove attachments, verify removal                        |
-| `pdfium.Document`            | Open/close, importPages, createNew, save operations       |
-| `extract_text --format json` | Verify JSON output structure, text blocks, formatting     |
+```bash
+# Run all tests except network-dependent tests
+zig build test --summary all
 
-Reference PDF files needed:
-- Simple single-page PDF
-- Multi-page PDF (10+ pages)
-- PDF with embedded images
-- PDF with text content
-- PDF with attachments
-- Password-protected PDF
-- PDF with various page sizes
-- PDF with multiple fonts/styles (for extract_text JSON output testing)
+# Run all tests including network-dependent tests (downloads test PDFs)
+RUN_NETWORK_TESTS=1 zig build test --summary all
+```
+
+#### Test Types
+
+**Unit Tests** (always run):
+- CLI argument parsing
+- Color parsing
+- Font mapping
+- PDF/A conformance parsing
+- Page range parsing
+
+**PDFium Tests** (always run):
+- Golden file tests (render, rotate, mirror operations)
+- PDF roundtrip tests (create PDF → extract text)
+- Requires: PDFium library (auto-downloads if missing) + local test files in `test-files/input/`
+
+**Network Tests** (require `RUN_NETWORK_TESTS=1`):
+- Integration tests using sample PDFs from [py-pdf/sample-files](https://github.com/py-pdf/sample-files)
+- Integration tests using ZUGFeRD invoices from [ZUGFeRD/corpus](https://github.com/ZUGFeRD/corpus)
+- Requires: PDFium library + network access
+- Test PDFs are cached in `test-cache/` directory (gitignored)
+
+#### Golden File Testing
+
+Visual regression tests compare PDF operations against reference "golden files":
+
+```bash
+# Generate/regenerate golden files
+zig build generate-golden-files
+
+# Delete and regenerate all golden files
+zig build generate-golden-files -Dclean
+
+# Run tests (golden file tests always run)
+zig build test
+```
+
+Golden files are stored in `test-files/expected/` and checked into git. Tests use pixel-level PNG comparison (not byte-level) to handle minor rendering variations across platforms.
 
 ## License
 

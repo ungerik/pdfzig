@@ -76,8 +76,8 @@ fn getTestFilePath(allocator: std.mem.Allocator, remote_path: []const u8) ![]u8 
 // ============================================================================
 
 test "xml: ZUGFeRD PDFs have attachments" {
-    // Skip if RUN_INTEGRATION_TESTS env var is not set
-    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+    // Skip if RUN_NETWORK_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_NETWORK_TESTS")) |val| {
         std.testing.allocator.free(val);
     } else |_| {
         return error.SkipZigTest;
@@ -106,8 +106,8 @@ test "xml: ZUGFeRD PDFs have attachments" {
 }
 
 test "xml: ZUGFeRD PDFs contain expected XML file" {
-    // Skip if RUN_INTEGRATION_TESTS env var is not set
-    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+    // Skip if RUN_NETWORK_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_NETWORK_TESTS")) |val| {
         std.testing.allocator.free(val);
     } else |_| {
         return error.SkipZigTest;
@@ -152,8 +152,8 @@ test "xml: ZUGFeRD PDFs contain expected XML file" {
 }
 
 test "xml: isXml correctly identifies XML attachments" {
-    // Skip if RUN_INTEGRATION_TESTS env var is not set
-    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+    // Skip if RUN_NETWORK_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_NETWORK_TESTS")) |val| {
         std.testing.allocator.free(val);
     } else |_| {
         return error.SkipZigTest;
@@ -192,8 +192,8 @@ test "xml: isXml correctly identifies XML attachments" {
 }
 
 test "xml: can extract XML data from ZUGFeRD PDFs" {
-    // Skip if RUN_INTEGRATION_TESTS env var is not set
-    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+    // Skip if RUN_NETWORK_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_NETWORK_TESTS")) |val| {
         std.testing.allocator.free(val);
     } else |_| {
         return error.SkipZigTest;
@@ -248,8 +248,8 @@ test "xml: can extract XML data from ZUGFeRD PDFs" {
 }
 
 test "xml: ZUGFeRD v1 contains ZUGFeRD-invoice.xml" {
-    // Skip if RUN_INTEGRATION_TESTS env var is not set
-    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+    // Skip if RUN_NETWORK_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_NETWORK_TESTS")) |val| {
         std.testing.allocator.free(val);
     } else |_| {
         return error.SkipZigTest;
@@ -292,8 +292,8 @@ test "xml: ZUGFeRD v1 contains ZUGFeRD-invoice.xml" {
 }
 
 test "xml: ZUGFeRD v2/Factur-X contains factur-x.xml" {
-    // Skip if RUN_INTEGRATION_TESTS env var is not set
-    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+    // Skip if RUN_NETWORK_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_NETWORK_TESTS")) |val| {
         std.testing.allocator.free(val);
     } else |_| {
         return error.SkipZigTest;

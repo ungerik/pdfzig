@@ -73,6 +73,21 @@ fn utf16LeToUtf8(allocator: std.mem.Allocator, utf16: []const u16) ?[]u8 {
 
 /// Initialize the PDFium library. Must be called before any other PDFium functions.
 /// If no library is found, attempts to download the latest version.
+/// Check if PDFium library is available (without triggering download)
+pub fn isAvailable() bool {
+    const allocator = std.heap.page_allocator;
+
+    const exe_dir = std.fs.selfExeDirPathAlloc(allocator) catch return false;
+    defer allocator.free(exe_dir);
+
+    const lib_info = loader.findBestPdfiumLibrary(allocator, exe_dir) catch return false;
+    if (lib_info) |info| {
+        allocator.free(info.path);
+        return true;
+    }
+    return false;
+}
+
 pub fn init() Error!void {
     return initWithAllocator(std.heap.page_allocator);
 }
