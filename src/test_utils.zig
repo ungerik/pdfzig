@@ -16,13 +16,14 @@ pub fn downloadFile(allocator: std.mem.Allocator, url: []const u8, local_path: [
     const result = client.fetch(.{
         .location = .{ .url = url },
         .response_writer = &response_writer.writer,
-    }) catch {
-        std.debug.print("HTTP request failed\n", .{});
+    }) catch |err| {
+        std.debug.print("HTTP request failed for URL: {s}\n", .{url});
+        std.debug.print("Error: {}\n", .{err});
         return error.DownloadFailed;
     };
 
     if (result.status != .ok) {
-        std.debug.print("HTTP status: {}\n", .{result.status});
+        std.debug.print("HTTP status {} for URL: {s}\n", .{ result.status, url });
         return error.DownloadFailed;
     }
 

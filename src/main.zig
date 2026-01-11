@@ -312,4 +312,5 @@ test {
     _ = @import("cli_parsing.zig");
     _ = @import("pdfcontent/images.zig");
     _ = @import("pdfcontent/textfmt.zig");
+    _ = @import("test_golden_files_test.zig");
 }

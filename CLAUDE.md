@@ -12,6 +12,8 @@ pdfzig is a Zig CLI tool that uses PDFium to work with PDF files. It supports re
 zig build              # Build the executable
 zig build run -- <args>  # Build and run with arguments
 zig build test         # Run unit tests
+zig build generate-golden-files  # Generate golden test files for visual/text comparison
+zig build generate-golden-files -Dclean  # Delete and regenerate all golden files
 zig build clean        # Remove build artifacts and caches (zig-out/, .zig-cache/, test-cache/)
 zig build fmt          # Check source code formatting
 zig build fmt-fix      # Fix source code formatting
@@ -154,10 +156,115 @@ Run the built executable directly:
 
 ## Testing
 
+### Integration Tests
+
 - **src/cmd/info_test.zig** - Integration tests using real PDFs from [py-pdf/sample-files](https://github.com/py-pdf/sample-files)
 - **src/cmd/extract_attachments_test.zig** - Tests using ZUGFeRD invoice PDFs from [ZUGFeRD/corpus](https://github.com/ZUGFeRD/corpus)
 - Tests auto-download PDFs to `test-cache/` directory (gitignored) on first run
 - All HTTP downloads use native Zig (no curl dependency)
+
+### Golden File Testing Infrastructure
+
+Tests PDF operations by comparing output against reference files (golden files).
+
+**Module Structure:**
+
+- **src/test_visual_compare.zig** - Pixel-level PNG comparison with tolerance
+  - `PixelDifference` - Struct tracking max delta, diff pixel count, average delta
+  - `comparePixels()` - Compare two RGBA pixel arrays with per-channel delta calculation
+  - `comparePngFiles()` - Load PNGs via zigimg, decode to RGBA, compare pixels (NOT encoded bytes)
+  - Supports RGB24, RGBA32, Grayscale8 pixel formats with automatic conversion
+
+- **src/test_golden_files.zig** - Golden file generation for all PDF operations
+  - Configuration constants: `TARGET_PIXEL_COUNT = 50_000`, `PIXEL_TOLERANCE = 5`
+  - `createExpectedTestFiles()` - Main entry point, iterates all PDFs in `test-files/input/`
+  - `calculateTargetDimensions()` - Calculates bitmap size preserving aspect ratio (width × height = 50,000 pixels)
+  - Operation generators:
+    - `createExpectedTestFilesInfo()` - Runs `pdfzig info`, captures plaintext output to `.txt`
+    - `createExpectedTestFilesInfoJson()` - Runs `pdfzig info --json`, captures JSON to `.json`
+    - `createExpectedTestFilesRenderPageBitmaps()` - Renders pages to PNG at 50k pixels
+    - `createExpectedTestFilesRotate90()` - Rotates 90°, renders to PNG
+    - `createExpectedTestFilesRotate180()` - Rotates 180°, renders to PNG
+    - `createExpectedTestFilesRotate270()` - Rotates 270°, renders to PNG
+    - `createExpectedTestFilesMirrorHorizontal()` - Mirrors horizontally, renders to PNG
+    - `createExpectedTestFilesMirrorVertical()` - Mirrors vertically, renders to PNG
+
+- **src/test_golden_files_test.zig** - Tests comparing operations against golden files
+  - Test per operation: render, rotate (90°/180°/270°), mirror (horizontal/vertical), info (text & JSON)
+  - Each test: performs operation → writes temp PNG → compares pixels with golden file
+  - Passes if `PixelDifference.max_delta ≤ PIXEL_TOLERANCE`
+  - Text outputs compared via string equality
+
+- **src/build_golden_files_helper.zig** - Build helper executable
+  - Runs during `zig build generate-golden-files`
+  - Parses `--clean` flag to optionally delete existing golden files first
+  - Calls `test_golden_files.createExpectedTestFiles()`
+
+**Directory Structure:**
+```
+test-files/
+├── input/                          # Test PDFs
+│   ├── 1Page.pdf
+│   └── 7Pages.pdf
+└── expected/                       # Golden files (checked into git)
+    ├── 1Page/
+    │   ├── info.txt                # Info command plaintext output
+    │   ├── info.json               # Info command JSON output
+    │   ├── render-page-bitmaps/    # Basic rendering
+    │   │   └── page-1.png          # 50k pixels, aspect-ratio preserved
+    │   ├── rotate-90/              # After 90° rotation
+    │   │   └── page-1.png
+    │   ├── rotate-180/             # After 180° rotation
+    │   │   └── page-1.png
+    │   ├── rotate-270/             # After 270° rotation
+    │   │   └── page-1.png
+    │   ├── mirror-horizontal/      # After horizontal mirror
+    │   │   └── page-1.png
+    │   └── mirror-vertical/        # After vertical mirror
+    │       └── page-1.png
+    └── 7Pages/
+        ├── info.txt
+        ├── info.json
+        ├── render-page-bitmaps/
+        │   ├── page-1.png
+        │   ├── page-2.png
+        │   └── ... (all 7 pages)
+        ├── rotate-90/
+        │   └── ... (rotated versions)
+        ├── rotate-180/
+        │   └── ... (rotated versions)
+        ├── rotate-270/
+        │   └── ... (rotated versions)
+        ├── mirror-horizontal/
+        │   └── ... (mirrored versions)
+        └── mirror-vertical/
+            └── ... (mirrored versions)
+```
+
+**Why Pixel-Level Comparison:**
+- PDFs contain creation timestamps → byte-by-byte comparison fails
+- PNG encoding may vary (compression settings, metadata)
+- Pixel comparison with tolerance handles anti-aliasing differences
+- 50k pixel resolution naturally averages out minor rendering variations
+
+**Usage:**
+```bash
+# Generate golden files for first time (or after adding operations)
+zig build generate-golden-files
+
+# Delete and regenerate all golden files
+zig build generate-golden-files -Dclean
+
+# Run tests (golden files must exist)
+zig build test
+```
+
+**Adding New Operations:**
+1. Add generator function in `test_golden_files.zig`
+2. Call it from `createExpectedTestFiles()`
+3. Add corresponding test in `test_golden_files_test.zig`
+4. Run `zig build generate-golden-files` to create reference files
+5. Commit golden files to git
 
 ## Key Implementation Details
 

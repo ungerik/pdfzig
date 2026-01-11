@@ -115,6 +115,32 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
+    // Golden file generation step
+    const golden_files_clean = b.option(bool, "clean", "Delete existing golden files before regenerating") orelse false;
+
+    const golden_files_helper_mod = b.createModule(.{
+        .root_source_file = b.path("src/build_golden_files_helper.zig"),
+        .target = b.graph.host,
+    });
+
+    // Import dependencies needed for golden file generation
+    golden_files_helper_mod.addImport("zigimg", zigimg_dep.module("zigimg"));
+    golden_files_helper_mod.addImport("zstbi", zstbi_dep.module("root"));
+    golden_files_helper_mod.link_libc = true;
+
+    const golden_files_helper = b.addExecutable(.{
+        .name = "build_golden_files_helper",
+        .root_module = golden_files_helper_mod,
+    });
+
+    const golden_files_run = b.addRunArtifact(golden_files_helper);
+    if (golden_files_clean) {
+        golden_files_run.addArg("--clean");
+    }
+
+    const golden_files_step = b.step("generate-golden-files", "Generate golden test files");
+    golden_files_step.dependOn(&golden_files_run.step);
+
     // Clean step - removes build artifacts and caches
     const clean_step = b.step("clean", "Remove build artifacts and caches");
     clean_step.dependOn(&b.addRemoveDirTree(.{ .cwd_relative = ".zig-cache" }).step);

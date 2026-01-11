@@ -5,6 +5,7 @@
 const std = @import("std");
 const loader = @import("loader.zig");
 const downloader = @import("downloader.zig");
+const pdf_loader = @import("../pdf/loader.zig");
 
 // Module-level library state
 var lib: ?loader.PdfiumLib = null;
@@ -190,77 +191,54 @@ pub const Document = struct {
         return .{ .handle = handle, .allocator = null, .pdf_buffer = null };
     }
 
-    /// Open a PDF document from a file path (loads entire file into memory)
-    pub fn open(allocator: std.mem.Allocator, path: []const u8) Error!Document {
+    /// Open a PDF document from memory bytes with optional password
+    /// The Document takes ownership of pdf_bytes and will free it when closed
+    pub fn openFromMemory(allocator: std.mem.Allocator, pdf_bytes: []u8, password: ?[]const u8) Error!Document {
         const l = lib orelse return Error.LibraryNotLoaded;
-
-        // Load entire PDF file into memory
-        const file = std.fs.cwd().openFile(path, .{}) catch return Error.FileNotFound;
-        defer file.close();
-
-        const stat = file.stat() catch return Error.FileNotFound;
-        const pdf_bytes = allocator.alloc(u8, stat.size) catch return Error.Unknown;
         errdefer allocator.free(pdf_bytes);
 
-        const bytes_read = file.readAll(pdf_bytes) catch return Error.FileNotFound;
-        if (bytes_read != stat.size) {
-            allocator.free(pdf_bytes);
-            return Error.FileNotFound;
-        }
+        const handle = if (password) |pwd| blk: {
+            // Prepare null-terminated password
+            var pass_buf: [256]u8 = undefined;
+            if (pwd.len >= pass_buf.len) {
+                return Error.PasswordRequired;
+            }
+            @memcpy(pass_buf[0..pwd.len], pwd);
+            pass_buf[pwd.len] = 0;
 
-        // Load from memory buffer - PDFium references this buffer, doesn't copy it
-        const handle = l.FPDF_LoadMemDocument(
-            pdf_bytes.ptr,
-            @intCast(pdf_bytes.len),
-            null,
-        ) orelse {
-            allocator.free(pdf_bytes);
-            return getLastError();
+            // Load from memory buffer with password - PDFium references this buffer, doesn't copy it
+            break :blk l.FPDF_LoadMemDocument(
+                pdf_bytes.ptr,
+                @intCast(pdf_bytes.len),
+                &pass_buf,
+            ) orelse {
+                return getLastError();
+            };
+        } else blk: {
+            // Load from memory buffer without password - PDFium references this buffer, doesn't copy it
+            break :blk l.FPDF_LoadMemDocument(
+                pdf_bytes.ptr,
+                @intCast(pdf_bytes.len),
+                null,
+            ) orelse {
+                return getLastError();
+            };
         };
 
         // Keep buffer alive for the document's lifetime
         return .{ .handle = handle, .allocator = allocator, .pdf_buffer = pdf_bytes };
     }
 
+    /// Open a PDF document from a file path (loads entire file into memory)
+    pub fn open(allocator: std.mem.Allocator, path: []const u8) Error!Document {
+        const pdf_bytes = pdf_loader.loadPdfFile(allocator, path) catch return Error.FileNotFound;
+        return openFromMemory(allocator, pdf_bytes, null);
+    }
+
     /// Open a password-protected PDF document (loads entire file into memory)
     pub fn openWithPassword(allocator: std.mem.Allocator, path: []const u8, password: []const u8) Error!Document {
-        const l = lib orelse return Error.LibraryNotLoaded;
-
-        // Load entire PDF file into memory
-        const file = std.fs.cwd().openFile(path, .{}) catch return Error.FileNotFound;
-        defer file.close();
-
-        const stat = file.stat() catch return Error.FileNotFound;
-        const pdf_bytes = allocator.alloc(u8, stat.size) catch return Error.Unknown;
-        errdefer allocator.free(pdf_bytes);
-
-        const bytes_read = file.readAll(pdf_bytes) catch return Error.FileNotFound;
-        if (bytes_read != stat.size) {
-            allocator.free(pdf_bytes);
-            return Error.FileNotFound;
-        }
-
-        // Prepare null-terminated password
-        var pass_buf: [256]u8 = undefined;
-        if (password.len >= pass_buf.len) {
-            allocator.free(pdf_bytes);
-            return Error.PasswordRequired;
-        }
-        @memcpy(pass_buf[0..password.len], password);
-        pass_buf[password.len] = 0;
-
-        // Load from memory buffer with password - PDFium references this buffer, doesn't copy it
-        const handle = l.FPDF_LoadMemDocument(
-            pdf_bytes.ptr,
-            @intCast(pdf_bytes.len),
-            &pass_buf,
-        ) orelse {
-            allocator.free(pdf_bytes);
-            return getLastError();
-        };
-
-        // Keep buffer alive for the document's lifetime
-        return .{ .handle = handle, .allocator = allocator, .pdf_buffer = pdf_bytes };
+        const pdf_bytes = pdf_loader.loadPdfFile(allocator, path) catch return Error.FileNotFound;
+        return openFromMemory(allocator, pdf_bytes, password);
     }
 
     /// Close the document and release resources
@@ -415,7 +393,7 @@ pub const Document = struct {
             if (self.author) |a| allocator.free(a);
             if (self.subject) |s| allocator.free(s);
             if (self.keywords) |k| allocator.free(k);
-            if (self.creator) |c_| allocator.free(c_);
+            if (self.creator) |c| allocator.free(c);
             if (self.producer) |p| allocator.free(p);
             if (self.creation_date) |cd| allocator.free(cd);
             if (self.mod_date) |md| allocator.free(md);

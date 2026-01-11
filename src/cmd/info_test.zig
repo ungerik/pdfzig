@@ -92,6 +92,13 @@ fn getTestFilePath(allocator: std.mem.Allocator, remote_path: []const u8) ![]u8 
 // ============================================================================
 
 test "info: page count verification" {
+    // Skip if RUN_INTEGRATION_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+        std.testing.allocator.free(val);
+    } else |_| {
+        return error.SkipZigTest;
+    }
+
     const allocator = std.testing.allocator;
 
     try ensureTestFiles(allocator);
@@ -119,6 +126,13 @@ test "info: page count verification" {
 }
 
 test "info: encrypted detection" {
+    // Skip if RUN_INTEGRATION_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+        std.testing.allocator.free(val);
+    } else |_| {
+        return error.SkipZigTest;
+    }
+
     const allocator = std.testing.allocator;
 
     try ensureTestFiles(allocator);
@@ -148,6 +162,13 @@ test "info: encrypted detection" {
 }
 
 test "info: metadata retrieval" {
+    // Skip if RUN_INTEGRATION_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+        std.testing.allocator.free(val);
+    } else |_| {
+        return error.SkipZigTest;
+    }
+
     const allocator = std.testing.allocator;
 
     try ensureTestFiles(allocator);
@@ -174,6 +195,13 @@ test "info: metadata retrieval" {
 }
 
 test "info: file version" {
+    // Skip if RUN_INTEGRATION_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+        std.testing.allocator.free(val);
+    } else |_| {
+        return error.SkipZigTest;
+    }
+
     const allocator = std.testing.allocator;
 
     try ensureTestFiles(allocator);
@@ -197,6 +225,13 @@ test "info: file version" {
 }
 
 test "info: image objects detection" {
+    // Skip if RUN_INTEGRATION_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+        std.testing.allocator.free(val);
+    } else |_| {
+        return error.SkipZigTest;
+    }
+
     const allocator = std.testing.allocator;
 
     try ensureTestFiles(allocator);
@@ -250,6 +285,13 @@ test "info: image objects detection" {
 }
 
 test "info: multi-page document" {
+    // Skip if RUN_INTEGRATION_TESTS env var is not set
+    if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_INTEGRATION_TESTS")) |val| {
+        std.testing.allocator.free(val);
+    } else |_| {
+        return error.SkipZigTest;
+    }
+
     const allocator = std.testing.allocator;
 
     try ensureTestFiles(allocator);
