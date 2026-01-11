@@ -1,0 +1,10 @@
+File: test-files/input/1Page.pdf
+Pages: 1
+PDF Version: 1.4
+Encrypted: No
+
+Metadata:
+  Creator: Writer
+  Producer: LibreOffice 25.8.2.2 (AARCH64)
+  Creation Date: D:20260110174440+01'00'
+  PDF/A: PDF/A-1b
