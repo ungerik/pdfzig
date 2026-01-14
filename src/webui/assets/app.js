@@ -402,7 +402,7 @@ function closeModal() {
 }
 
 // Close modal on click
-const closeBtn = document.querySelector('.close');
+const closeBtn = document.querySelector('#modal .close');
 if (closeBtn) {
     closeBtn.addEventListener('click', closeModal);
 }
@@ -572,9 +572,12 @@ function showLoadingSpinner(card) {
 
     const overlay = document.createElement('div');
     overlay.className = 'loading-overlay';
+    overlay.setAttribute('role', 'status');
+    overlay.setAttribute('aria-label', 'Loading');
 
     const spinner = document.createElement('div');
     spinner.className = 'loading-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
 
     overlay.appendChild(spinner);
     card.appendChild(overlay);
@@ -592,6 +595,7 @@ function hideLoadingSpinner(card) {
 function showErrorMessage(message) {
     // Create toast notification
     const toast = document.createElement('div');
+    toast.setAttribute('role', 'alert');
     toast.style.cssText = `
         position: fixed;
         top: 20px;
@@ -944,11 +948,12 @@ function ensureResetButtonExists(pageId) {
     const resetBtn = document.createElement('button');
     resetBtn.className = 'btn btn-round btn-orange btn-top-center';
     resetBtn.title = 'Reset to original';
+    resetBtn.setAttribute('aria-label', 'Reset to original');
     resetBtn.onclick = function(e) {
         e.stopPropagation();
         resetPage(pageId);
     };
-    resetBtn.innerHTML = '<svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>';
+    resetBtn.innerHTML = '<svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>';
 
     // Insert button after rotate-right button (or at beginning if not found)
     const rotateRightBtn = overlay.querySelector('.btn-top-right');
@@ -1080,6 +1085,9 @@ document.body.addEventListener('htmx:configRequest', (e) => {
 function downloadPageOrDocument(pageId, docId) {
     // Create modal overlay
     const modal = document.createElement('div');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'download-modal-title');
     modal.style.cssText = `
         position: fixed;
         top: 0;
@@ -1118,7 +1126,7 @@ function downloadPageOrDocument(pageId, docId) {
                 to { transform: translateY(0); opacity: 1; }
             }
         </style>
-        <h2 style="margin: 0 0 20px 0; color: #fff; font-size: 24px;">Download Options</h2>
+        <h2 id="download-modal-title" style="margin: 0 0 20px 0; color: #fff; font-size: 24px;">Download Options</h2>
         <p style="color: #ccc; margin: 0 0 30px 0; line-height: 1.6; font-size: 15px;">
             Choose what you'd like to download:
         </p>

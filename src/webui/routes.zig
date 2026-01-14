@@ -496,10 +496,10 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
 
             try html_writer.print(
                 \\<div style="position: relative; display: inline-block; margin: 20px;">
-                \\  <button onclick="window.location.href='/api/documents/{d}/download';" style="position: absolute; left: -40px; top: 50%; transform: translateY(-50%); background: rgba(0,150,0,0.9); color: white; border: none; border-radius: 8px; width: 35px; height: 60px; cursor: pointer; font-size: 1.2em; display: flex; align-items: center; justify-content: center; z-index: 5;" title="Download {s}">💾</button>
+                \\  <button onclick="window.location.href='/api/documents/{d}/download';" style="position: absolute; left: -40px; top: 50%; transform: translateY(-50%); background: rgba(0,150,0,0.9); color: white; border: none; border-radius: 8px; width: 35px; height: 60px; cursor: pointer; font-size: 1.2em; display: flex; align-items: center; justify-content: center; z-index: 5;" title="Download {s}" aria-label="Download {s}">💾</button>
                 \\  <div class="document-group" data-doc-id="{d}" data-modified="{s}" title="{s}" style="display: inline-flex; padding: 20px; border-radius: 20px; background-color: rgb({d},{d},{d});">
                 \\    <div class="pages-grid" style="display: flex; flex-wrap: wrap; gap: 10px;">
-            , .{ doc.id, doc.filename, doc.id, doc_modified_attr, doc.filename, color[0], color[1], color[2] });
+            , .{ doc.id, doc.filename, doc.filename, doc.id, doc_modified_attr, doc.filename, color[0], color[1], color[2] });
 
             // Render each page
             for (doc.pages.items, 0..) |*page, page_idx| {
@@ -530,9 +530,9 @@ fn servePageList(global_state: *GlobalState, connection: std.net.Server.Connecti
             try html_writer.print(
                 \\    </div>
                 \\  </div>
-                \\  <button onclick="if(confirm('Delete all pages in {s}?')) {{ fetch('/api/documents/{d}/delete-all', {{method:'POST',headers:{{'X-Client-ID':clientId}}}}).then(()=>htmx.trigger(document.body,'pageUpdate')); }}" style="position: absolute; right: -40px; top: 50%; transform: translateY(-50%); background: rgba(200,0,0,0.9); color: white; border: none; border-radius: 8px; width: 35px; height: 60px; cursor: pointer; font-size: 1.2em; display: flex; align-items: center; justify-content: center; z-index: 5;" title="Delete all pages in {s}">🗑</button>
+                \\  <button onclick="if(confirm('Delete all pages in {s}?')) {{ fetch('/api/documents/{d}/delete-all', {{method:'POST',headers:{{'X-Client-ID':clientId}}}}).then(()=>htmx.trigger(document.body,'pageUpdate')); }}" style="position: absolute; right: -40px; top: 50%; transform: translateY(-50%); background: rgba(200,0,0,0.9); color: white; border: none; border-radius: 8px; width: 35px; height: 60px; cursor: pointer; font-size: 1.2em; display: flex; align-items: center; justify-content: center; z-index: 5;" title="Delete all pages in {s}" aria-label="Delete all pages in {s}">🗑</button>
                 \\</div>
-            , .{ doc.filename, doc.id, doc.filename });
+            , .{ doc.filename, doc.id, doc.filename, doc.filename });
         }
 
         // Close wrapper
@@ -836,40 +836,40 @@ fn renderPageCardHTML(writer: anytype, page: *const PageState, allocator: std.me
         \\    <img class="page-thumbnail" src="/api/pages/{s}/thumbnail?v={d}" alt="Page {d}">
         \\  </div>
         \\  <div class="page-overlay">
-        \\    <button onclick="event.stopPropagation(); rotatePage('{s}', -90);" class="btn btn-round btn-green btn-top-left" title="Rotate left">
-        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\    <button onclick="event.stopPropagation(); rotatePage('{s}', -90);" class="btn btn-round btn-green btn-top-left" title="Rotate left" aria-label="Rotate left">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 110 12h-3" />
         \\      </svg>
         \\    </button>
-        \\    <button onclick="event.stopPropagation(); rotatePage('{s}', 90);" class="btn btn-round btn-green btn-top-right" title="Rotate right">
-        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\    <button onclick="event.stopPropagation(); rotatePage('{s}', 90);" class="btn btn-round btn-green btn-top-right" title="Rotate right" aria-label="Rotate right">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 100 12h3" />
         \\      </svg>
         \\    </button>
-        \\    <button onclick="event.stopPropagation(); openModal('/api/pages/{s}/fullsize?dpi=150&v={d}');" class="btn btn-round" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(107, 114, 128, 0.8);" title="Zoom / Preview">
-        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\    <button onclick="event.stopPropagation(); openModal('/api/pages/{s}/fullsize?dpi=150&v={d}');" class="btn btn-round" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(107, 114, 128, 0.8);" title="Zoom / Preview" aria-label="Zoom / Preview">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607zM10.5 7.5v6m3-3h-6" />
         \\      </svg>
         \\    </button>
-        \\    <button onclick="event.stopPropagation(); mirrorPage('{s}', 'updown');" class="btn btn-pill btn-yellow btn-middle-left" title="Mirror vertical">
-        \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\    <button onclick="event.stopPropagation(); mirrorPage('{s}', 'updown');" class="btn btn-pill btn-yellow btn-middle-left" title="Mirror vertical" aria-label="Mirror vertical">
+        \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l-4 4M12 3l4 4M12 3v8" />
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M12 21l-4-4M12 21l-4-4M12 21v-8" />
         \\      </svg>
         \\    </button>
-        \\    <button onclick="event.stopPropagation(); mirrorPage('{s}', 'leftright');" class="btn btn-pill btn-yellow btn-middle-right" title="Mirror horizontal">
-        \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\    <button onclick="event.stopPropagation(); mirrorPage('{s}', 'leftright');" class="btn btn-pill btn-yellow btn-middle-right" title="Mirror horizontal" aria-label="Mirror horizontal">
+        \\      <svg class="icon icon-md" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M4 12l4-4M4 12l4 4M4 12h7" />
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M20 12l-4-4M20 12l-4 4M20 12h-7" />
         \\      </svg>
         \\    </button>
-        \\    <button onclick="event.stopPropagation(); deletePage('{s}');" class="btn btn-round btn-red btn-bottom-left" title="Delete">
-        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\    <button onclick="event.stopPropagation(); deletePage('{s}');" class="btn btn-round btn-red btn-bottom-left" title="Delete" aria-label="Delete">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
         \\      </svg>
         \\    </button>
-        \\    <button onclick="event.stopPropagation(); downloadPageOrDocument('{s}', {d});" class="btn btn-round btn-blue btn-bottom-right" title="Download">
-        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        \\    <button onclick="event.stopPropagation(); downloadPageOrDocument('{s}', {d});" class="btn btn-round btn-blue btn-bottom-right" title="Download" aria-label="Download">
+        \\      <svg class="icon icon-lg" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
         \\        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
         \\      </svg>
         \\    </button>
