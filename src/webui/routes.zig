@@ -35,9 +35,9 @@ fn bakeTransformationsToPage(
 
     // Apply inverse matrix to all page objects
     const object_count = page.getObjectCount();
-    var i: u32 = 0;
+    var i: usize = 0;
     while (i < object_count) : (i += 1) {
-        if (page.getObject(i)) |obj| {
+        if (page.getObject(@intCast(i))) |obj| {
             obj.transform(inv_matrix.a, inv_matrix.b, inv_matrix.c, inv_matrix.d, inv_matrix.e, inv_matrix.f);
         }
     }
@@ -157,7 +157,7 @@ pub fn dispatch(
         const action = parts.next() orelse return serve404(connection);
 
         // Parse document ID
-        const doc_id = std.fmt.parseInt(u32, doc_id_str, 10) catch return serve404(connection);
+        const doc_id = std.fmt.parseInt(usize, doc_id_str, 10) catch return serve404(connection);
 
         if (std.mem.eql(u8, action, "download")) {
             return handleDownloadDocument(global_state, connection, doc_id);
@@ -169,7 +169,7 @@ pub fn dispatch(
             if (!is_post) return serveMethodNotAllowed(connection);
             if (readonly) return serveForbidden(connection);
             const split_after = parts.next() orelse return serve404(connection);
-            const page_idx = std.fmt.parseInt(u32, split_after, 10) catch return serve404(connection);
+            const page_idx = std.fmt.parseInt(usize, split_after, 10) catch return serve404(connection);
             return handleSplitDocument(global_state, connection, doc_id, page_idx);
         }
 
@@ -223,7 +223,7 @@ pub fn dispatch(
             if (readonly) return serveForbidden(connection);
             // Get version from next path segment
             const version_str = parts.next() orelse return serveError(connection, .bad_request, "Missing version parameter");
-            const version = std.fmt.parseInt(u32, version_str, 10) catch return serveError(connection, .bad_request, "Invalid version");
+            const version = std.fmt.parseInt(usize, version_str, 10) catch return serveError(connection, .bad_request, "Invalid version");
             return handleRevert(global_state, connection, page_id, version);
         } else if (std.mem.eql(u8, action, "download")) {
             return handlePageDownload(global_state, connection, page_id);
@@ -419,7 +419,7 @@ fn serveDocumentStatus(global_state: *GlobalState, connection: std.net.Server.Co
 
 /// Response structure for page version state
 const PageVersionStateJSON = struct {
-    version: u32,
+    version: usize,
     operation: []const u8,
     matrix: [6]f64,
     width: f64,
@@ -430,15 +430,15 @@ const PageVersionStateJSON = struct {
 /// Response structure for page info
 const PageInfoJSON = struct {
     id: []const u8,
-    original_index: u32,
+    original_index: usize,
     thumbnail_url: []const u8,
     version_history: []PageVersionStateJSON,
-    current_version: u32,
+    current_version: usize,
 };
 
 /// Response structure for document info
 const DocumentInfoJSON = struct {
-    id: u32,
+    id: usize,
     filename: []const u8,
     color: [3]u8,
     modified: bool,
@@ -700,7 +700,7 @@ fn serveFullsizePage(global_state: *GlobalState, connection: std.net.Server.Conn
         };
         defer page.close();
 
-        var orig_page = try doc.doc_original.loadPage(page_state.original_index);
+        var orig_page = try doc.doc_original.loadPage(@intCast(page_state.original_index));
         defer orig_page.close();
 
         const current_state = page_state.modifications.getCurrentState();
@@ -945,7 +945,7 @@ fn handleDelete(global_state: *GlobalState, connection: std.net.Server.Connectio
 }
 
 /// Handle revert page request - returns JSON response with version info
-fn handleRevert(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, target_version: u32) !void {
+fn handleRevert(global_state: *GlobalState, connection: std.net.Server.Connection, page_id: PageId, target_version: usize) !void {
     operations.revertPageToVersion(global_state, page_id.doc_id, page_id.page_num, target_version) catch {
         return serveError(connection, .internal_server_error, "Revert failed");
     };
@@ -983,9 +983,9 @@ const OperationRequest = struct {
     type: []const u8, // "rotate", "mirror", "delete"
     degrees: ?i32 = null, // For rotate
     direction: ?[]const u8 = null, // For mirror: "updown" or "leftright"
-    expected_version: u32,
+    expected_version: usize,
     new_state: struct {
-        version: u32,
+        version: usize,
         operation: []const u8,
         matrix: [6]f64,
         width: f64,
@@ -997,7 +997,7 @@ const OperationRequest = struct {
 /// Response structure for operations
 const OperationResponse = struct {
     success: bool,
-    version: u32,
+    version: usize,
     document_modified: bool,
 };
 
@@ -1123,7 +1123,7 @@ fn handlePageDownload(global_state: *GlobalState, connection: std.net.Server.Con
         };
         defer page.close();
 
-        var orig_page = try doc.doc_original.loadPage(page_state.original_index);
+        var orig_page = try doc.doc_original.loadPage(@intCast(page_state.original_index));
         defer orig_page.close();
 
         const current_state = page_state.modifications.getCurrentState();
@@ -1355,7 +1355,7 @@ fn sendPdfDownload(
     defer new_doc.close();
 
     // Import pages from original document, baking transformations
-    var page_num: u32 = 0;
+    var page_num: usize = 0;
     for (doc.pages.items) |page_state| {
         const current_state = page_state.modifications.getCurrentState();
 
@@ -1366,18 +1366,18 @@ fn sendPdfDownload(
 
         // Import page from ORIGINAL document (unmodified)
         const page_indices = [_]c_int{@intCast(page_state.original_index)};
-        if (!new_doc.importPages(&doc.doc_original, &page_indices, 0xFFFFFFFF)) {
+        if (!new_doc.importPages(&doc.doc_original, &page_indices, @intCast(page_num))) {
             return serveError(connection, .internal_server_error, "Failed to import page");
         }
 
         // Check if we need to bake transformations
         if (page_state.modifications.needsTransformation()) {
-            var page = new_doc.loadPage(page_num) catch {
+            var page = new_doc.loadPage(@intCast(page_num)) catch {
                 return serveError(connection, .internal_server_error, "Failed to load imported page");
             };
             defer page.close();
 
-            var orig_page = doc.doc_original.loadPage(page_state.original_index) catch {
+            var orig_page = doc.doc_original.loadPage(@intCast(page_state.original_index)) catch {
                 return serveError(connection, .internal_server_error, "Failed to load original page");
             };
             defer orig_page.close();
@@ -1453,7 +1453,7 @@ fn handleDownloadAll(global_state: *GlobalState, connection: std.net.Server.Conn
 }
 
 /// Handle download single document request
-fn handleDownloadDocument(global_state: *GlobalState, connection: std.net.Server.Connection, doc_id: u32) !void {
+fn handleDownloadDocument(global_state: *GlobalState, connection: std.net.Server.Connection, doc_id: usize) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -1469,7 +1469,7 @@ fn handleDownloadDocument(global_state: *GlobalState, connection: std.net.Server
 }
 
 /// Handle delete all pages in a document
-fn handleDeleteAllPages(global_state: *GlobalState, connection: std.net.Server.Connection, doc_id: u32) !void {
+fn handleDeleteAllPages(global_state: *GlobalState, connection: std.net.Server.Connection, doc_id: usize) !void {
     global_state.lock();
     defer global_state.unlock();
 
@@ -1501,7 +1501,7 @@ fn handleDeleteAllPages(global_state: *GlobalState, connection: std.net.Server.C
 }
 
 /// Handle split document at specified page
-fn handleSplitDocument(global_state: *GlobalState, connection: std.net.Server.Connection, doc_id: u32, split_after_page_idx: u32) !void {
+fn handleSplitDocument(global_state: *GlobalState, connection: std.net.Server.Connection, doc_id: usize, split_after_page_idx: usize) !void {
     // Use arena allocator for proper cleanup
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -1542,9 +1542,9 @@ fn handleSplitDocument(global_state: *GlobalState, connection: std.net.Server.Co
     defer doc1.close();
 
     // Delete pages after split point in doc1
-    var i: u32 = @intCast(doc.pages.items.len - 1);
+    var i: usize = doc.pages.items.len - 1;
     while (i > split_after_page_idx) : (i -= 1) {
-        try doc1.deletePage(i);
+        try doc1.deletePage(@intCast(i));
     }
     try doc1.saveWithVersion(temp_path1, null);
 

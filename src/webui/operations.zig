@@ -39,8 +39,8 @@ pub fn checkDocumentModificationStatus(doc: *DocumentState) void {
 /// Non-destructive: adds rotation operation to version history
 pub fn rotatePage(
     state: *GlobalState,
-    doc_id: u32,
-    page_index: u32,
+    doc_id: usize,
+    page_index: usize,
     degrees: i32,
     operation_desc: []const u8,
 ) !void {
@@ -56,7 +56,7 @@ pub fn rotatePage(
     const current = page_state.modifications.getCurrentState();
 
     // Get original dimensions for matrix calculation
-    var original_page = try doc.doc_original.loadPage(page_state.original_index);
+    var original_page = try doc.doc_original.loadPage(@intCast(page_state.original_index));
     defer original_page.close();
     const original_width = original_page.getWidth();
     const original_height = original_page.getHeight();
@@ -91,8 +91,8 @@ pub const MirrorDirection = enum { updown, leftright };
 /// Non-destructive: adds mirror operation to version history
 pub fn mirrorPage(
     state: *GlobalState,
-    doc_id: u32,
-    page_index: u32,
+    doc_id: usize,
+    page_index: usize,
     direction: MirrorDirection,
     operation_desc: []const u8,
 ) !void {
@@ -108,7 +108,7 @@ pub fn mirrorPage(
     const current = page_state.modifications.getCurrentState();
 
     // Get original dimensions for matrix calculation
-    var original_page = try doc.doc_original.loadPage(page_state.original_index);
+    var original_page = try doc.doc_original.loadPage(@intCast(page_state.original_index));
     defer original_page.close();
     const original_width = original_page.getWidth();
     const original_height = original_page.getHeight();
@@ -143,8 +143,8 @@ pub fn mirrorPage(
 /// Mark a page as deleted (soft delete - doesn't actually remove it yet)
 pub fn deletePage(
     state: *GlobalState,
-    doc_id: u32,
-    page_index: u32,
+    doc_id: usize,
+    page_index: usize,
 ) !void {
     state.lock();
     defer state.unlock();
@@ -178,8 +178,8 @@ pub fn deletePage(
 /// Revert a page to its original state (version 0)
 pub fn revertPage(
     state: *GlobalState,
-    doc_id: u32,
-    page_index: u32,
+    doc_id: usize,
+    page_index: usize,
 ) !void {
     return revertPageToVersion(state, doc_id, page_index, 0);
 }
@@ -187,9 +187,9 @@ pub fn revertPage(
 /// Revert a page to a specific version
 pub fn revertPageToVersion(
     state: *GlobalState,
-    doc_id: u32,
-    page_index: u32,
-    target_version: u32,
+    doc_id: usize,
+    page_index: usize,
+    target_version: usize,
 ) !void {
     state.lock();
     defer state.unlock();

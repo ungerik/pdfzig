@@ -10,21 +10,8 @@ pub const Matrix = matrix_mod.Matrix;
 
 /// Unique identifier for a page within the global state
 pub const PageId = struct {
-    doc_id: u32,
-    page_num: u32, // 0-based internal index
-
-    /// Encode doc_id and page_num into a single u64 for use in URLs/IDs
-    pub fn toGlobalId(self: PageId) u64 {
-        return (@as(u64, self.doc_id) << 32) | self.page_num;
-    }
-
-    /// Decode a global ID back into doc_id and page_num
-    pub fn fromGlobalId(global_id: u64) PageId {
-        return .{
-            .doc_id = @intCast(global_id >> 32),
-            .page_num = @intCast(global_id & 0xFFFFFFFF),
-        };
-    }
+    doc_id: usize,
+    page_num: usize, // 0-based internal index
 
     /// Format as string for URL paths (e.g., "1-0" for doc 1, page 0)
     pub fn format(
@@ -46,15 +33,15 @@ pub const PageId = struct {
         if (iter.next() != null) return error.InvalidFormat;
 
         return .{
-            .doc_id = try std.fmt.parseInt(u32, doc_str, 10),
-            .page_num = try std.fmt.parseInt(u32, page_str, 10),
+            .doc_id = try std.fmt.parseInt(usize, doc_str, 10),
+            .page_num = try std.fmt.parseInt(usize, page_str, 10),
         };
     }
 };
 
 /// Single version state in page history
 pub const PageVersionState = struct {
-    version: u32,
+    version: usize,
     operation: []const u8, // Owned by this struct
     matrix: Matrix,
     width: f64,
@@ -80,7 +67,7 @@ pub const PageVersionState = struct {
 /// Track version history for a page (full operation history)
 pub const PageModification = struct {
     history: std.array_list.Managed(PageVersionState),
-    current_version: u32, // Index into history array
+    current_version: usize, // Index into history array
     allocator: std.mem.Allocator,
 
     /// Create initial state (version 0 with identity matrix)
@@ -121,14 +108,14 @@ pub const PageModification = struct {
     /// Add new version state
     pub fn addVersion(self: *PageModification, operation: []const u8, matrix: Matrix, width: f64, height: f64, deleted: bool) !void {
         try self.history.append(.{
-            .version = @intCast(self.history.items.len),
+            .version = self.history.items.len,
             .operation = try self.allocator.dupe(u8, operation),
             .matrix = matrix,
             .width = width,
             .height = height,
             .deleted = deleted,
         });
-        self.current_version = @intCast(self.history.items.len - 1);
+        self.current_version = self.history.items.len - 1;
     }
 
     /// Check if page is in original state
@@ -154,7 +141,7 @@ pub const PageModification = struct {
 
     /// Revert to a specific version and truncate history
     /// This clears all versions after target_version, so new modifications start fresh
-    pub fn revertToVersion(self: *PageModification, target_version: u32) !void {
+    pub fn revertToVersion(self: *PageModification, target_version: usize) !void {
         if (target_version >= self.history.items.len) {
             return error.VersionNotFound;
         }
@@ -204,8 +191,8 @@ pub const PageModification = struct {
 /// Per-page state including modifications and cache
 pub const PageState = struct {
     id: PageId,
-    original_index: u32, // original position in document (0-based)
-    current_index: u32, // current position after reordering (0-based)
+    original_index: usize, // original position in document (0-based)
+    current_index: usize, // current position after reordering (0-based)
     modifications: PageModification,
     thumbnail_cache: ?[]u8, // PNG bytes for current state, owned by this struct
     original_thumbnail_cache: ?[]u8, // PNG bytes for original unmodified state, owned by this struct
@@ -254,7 +241,7 @@ pub const DocumentSource = enum {
 
 /// Per-document state
 pub const DocumentState = struct {
-    id: u32,
+    id: usize,
     source: DocumentSource,
     filepath: []const u8, // file path (may be temp file for uploaded PDFs)
     filename: []const u8, // display name
@@ -290,7 +277,7 @@ pub const DocumentState = struct {
 pub const GlobalState = struct {
     allocator: std.mem.Allocator,
     documents: std.array_list.Managed(*DocumentState),
-    next_doc_id: u32 = 0,
+    next_doc_id: usize = 0,
     thumbnail_dpi: f64 = 72.0, // updated dynamically from client
     mutex: std.Thread.Mutex = .{}, // protects state from concurrent browser windows
 
@@ -377,17 +364,16 @@ pub const GlobalState = struct {
         try doc_state.pages.ensureTotalCapacity(page_count);
 
         for (0..page_count) |i| {
-            const page_index: u32 = @intCast(i);
-            var page = try doc.loadPage(page_index);
+            var page = try doc.loadPage(@intCast(i));
             defer page.close();
 
             const page_width = page.getWidth();
             const page_height = page.getHeight();
 
             const page_state = PageState{
-                .id = .{ .doc_id = doc_id, .page_num = page_index },
-                .original_index = page_index,
-                .current_index = page_index,
+                .id = .{ .doc_id = doc_id, .page_num = i },
+                .original_index = i,
+                .current_index = i,
                 .modifications = try PageModification.init(self.allocator, page_width, page_height),
                 .thumbnail_cache = null,
                 .original_thumbnail_cache = null,
@@ -402,7 +388,7 @@ pub const GlobalState = struct {
     }
 
     /// Get document by ID
-    pub fn getDocument(self: *GlobalState, doc_id: u32) ?*DocumentState {
+    pub fn getDocument(self: *GlobalState, doc_id: usize) ?*DocumentState {
         for (self.documents.items) |doc| {
             if (doc.id == doc_id) {
                 return doc;
@@ -420,7 +406,7 @@ pub const GlobalState = struct {
 };
 
 /// Generate a harmonizing dark color for document background
-fn generateDocumentColor(doc_id: u32) [3]u8 {
+fn generateDocumentColor(doc_id: usize) [3]u8 {
     // Color palette of harmonizing brighter colors for better contrast
     const palette = [_][3]u8{
         .{ 70, 100, 140 }, // bright blue

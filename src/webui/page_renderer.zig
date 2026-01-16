@@ -67,7 +67,7 @@ pub fn renderThumbnail(
             // Get original page dimensions for error PNG
             var width: f64 = 600;
             var height: f64 = 600;
-            if (doc.doc_original.loadPage(page_state.original_index)) |pg| {
+            if (doc.doc_original.loadPage(@intCast(page_state.original_index))) |pg| {
                 var page = pg;
                 defer page.close();
                 width = page.getWidth();
@@ -96,7 +96,7 @@ fn renderOriginalThumbnail(
     dpi: f64,
 ) ![]u8 {
     // Load original page (unmodified)
-    var page = try doc.doc_original.loadPage(page_state.original_index);
+    var page = try doc.doc_original.loadPage(@intCast(page_state.original_index));
     defer page.close();
 
     // Get original page dimensions
@@ -126,7 +126,7 @@ fn renderOriginalThumbnail(
 pub fn renderFullSize(
     allocator: std.mem.Allocator,
     doc: pdfium.Document,
-    page_index: u32,
+    page_index: usize,
     dpi: f64,
 ) ![]u8 {
     // Try to render the page, but catch errors and generate error PNG
@@ -144,7 +144,7 @@ pub fn renderFullSize(
         // Try to get page dimensions, fallback to square on error
         var width: f64 = 600;
         var height: f64 = 600;
-        if (doc.loadPage(page_index)) |pg| {
+        if (doc.loadPage(@intCast(page_index))) |pg| {
             var page = pg;
             defer page.close();
             width = page.getWidth();
@@ -161,11 +161,11 @@ pub fn renderFullSize(
 fn renderFullSizeInternal(
     allocator: std.mem.Allocator,
     doc: pdfium.Document,
-    page_index: u32,
+    page_index: usize,
     dpi: f64,
 ) ![]u8 {
     // Load the page
-    var page = try doc.loadPage(page_index);
+    var page = try doc.loadPage(@intCast(page_index));
     defer page.close();
 
     // Calculate dimensions at target DPI
