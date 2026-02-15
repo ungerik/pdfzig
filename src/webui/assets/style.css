@@ -1,0 +1,540 @@
+:root {
+    --bg-dark: #1a1a1a;
+    --bg-card: #2a2a2a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --accent: #4a9eff;
+    --readonly-warning: #ff9800;
+    --danger: #ff4444;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    padding-bottom: 50px;  /* Space for bottom bar */
+}
+
+#top-bar {
+    position: sticky;
+    top: 0;
+    background: var(--bg-card);
+    padding: 12px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 100;
+    gap: 20px;
+}
+
+#top-bar h1 {
+    margin: 0;
+    font-size: 1.5em;
+    color: var(--accent);
+}
+
+.controls {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.controls button {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid var(--text-secondary);
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: all 0.2s;
+}
+
+.controls button:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+}
+
+.controls button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.readonly-badge {
+    background: var(--readonly-warning);
+    color: #000;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 0.9em;
+}
+
+#bottom-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-card);
+    padding: 10px 20px;
+    text-align: center;
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    border-top: 1px solid rgba(255,255,255,0.1);
+    z-index: 50;
+}
+
+#bottom-bar a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+#bottom-bar a:hover {
+    text-decoration: underline;
+}
+
+#page-container {
+    padding: 20px;
+    min-height: calc(100vh - 120px);
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-secondary);
+    font-size: 1.1em;
+}
+
+.pages-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: flex-start;
+}
+
+/* Outer container - not transformed, adjusts size to fit rotated content */
+.page-card-outer {
+    position: relative;
+    display: inline-block;
+    transition: width 0.3s ease-in-out, height 0.3s ease-in-out;
+}
+
+.page-card-outer[draggable="true"] {
+    cursor: move;
+}
+
+/* Inner container - gets transformed (rotated/mirrored) */
+.page-card-inner {
+    background: white;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    cursor: pointer;
+    transition: transform 0.3s ease-in-out, box-shadow 0.2s;
+    overflow: hidden;
+    z-index: 1;
+}
+
+/* Disable transitions during initial loading */
+.page-card-inner.no-transition {
+    transition: none;
+}
+
+.page-card-outer.no-transition {
+    transition: none;
+}
+
+.page-card-outer:hover .page-card-inner {
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+.page-thumbnail {
+    display: block;
+    max-height: calc((100vh - 120px) / 5 - 40px);
+    min-height: 200px;
+    width: auto;
+    max-width: 300px;
+    background: #f5f5f5;
+    object-fit: contain;
+}
+
+/* Loading spinner overlay - using real DOM element instead of pseudo-elements */
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(2px);
+    z-index: 10;
+    pointer-events: none;
+    display: none; /* Hidden by default */
+    align-items: center;
+    justify-content: center;
+}
+
+/* Show loading overlay when htmx adds .htmx-request class */
+.loading-overlay.htmx-request {
+    display: flex;
+}
+
+.loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid rgba(74, 158, 255, 0.3);
+    border-top-color: #4a9eff;
+    border-bottom-color: #4a9eff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.page-info {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,0.8);
+    color: white;
+    padding: 4px 8px;
+    font-size: 0.8em;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.page-overlay {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.page-card-outer:hover .page-overlay {
+    opacity: 1 !important;
+}
+
+/* Base button styles */
+.page-overlay .btn {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    transition: background-color 0.2s ease, transform 0.2s ease, top 0.3s ease-in-out, bottom 0.3s ease-in-out, left 0.3s ease-in-out, right 0.3s ease-in-out;
+    pointer-events: auto;
+}
+
+/* Round buttons */
+.page-overlay .btn-round {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 50%;
+}
+
+/* Pill buttons */
+.page-overlay .btn-pill {
+    width: 2rem;
+    height: 3rem;
+    border-radius: 9999px;
+}
+
+/* Color variants */
+.page-overlay .btn-green {
+    background-color: #22c55e;
+}
+.page-overlay .btn-green:hover {
+    background-color: #16a34a;
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-blue {
+    background-color: #3b82f6;
+}
+.page-overlay .btn-blue:hover {
+    background-color: #2563eb;
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-yellow {
+    background-color: #facc15;
+}
+.page-overlay .btn-yellow:hover {
+    background-color: #eab308;
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-red {
+    background-color: #ef4444;
+}
+.page-overlay .btn-red:hover {
+    background-color: #dc2626;
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-orange {
+    background-color: #f97316;
+}
+.page-overlay .btn-orange:hover {
+    background-color: #ea580c;
+    transform: scale(1.1);
+}
+
+/* Position variants */
+.page-overlay .btn-top-left {
+    top: -1rem;
+    left: -1rem;
+}
+
+.page-overlay .btn-top-center {
+    top: -1rem;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.page-overlay .btn-top-right {
+    top: -1rem;
+    right: -1rem;
+}
+
+.page-overlay .btn-middle-left {
+    top: 50%;
+    left: -1.25rem;
+    transform: translateY(-50%);
+}
+
+.page-overlay .btn-middle-right {
+    top: 50%;
+    right: -1.25rem;
+    transform: translateY(-50%);
+}
+
+.page-overlay .btn-bottom-left {
+    bottom: -1rem;
+    left: 50%;
+    transform: translateX(-130%);
+}
+
+.page-overlay .btn-bottom-right {
+    bottom: -1rem;
+    left: 50%;
+    transform: translateX(30%);
+}
+
+/* Adjust hover transforms for positioned buttons */
+.page-overlay .btn-top-left:hover {
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-top-center:hover {
+    transform: translateX(-50%) scale(1.1);
+}
+
+.page-overlay .btn-top-right:hover {
+    transform: scale(1.1);
+}
+
+.page-overlay .btn-middle-left:hover {
+    transform: translateY(-50%) scale(1.1);
+}
+
+.page-overlay .btn-middle-right:hover {
+    transform: translateY(-50%) scale(1.1);
+}
+
+.page-overlay .btn-bottom-left:hover {
+    transform: translateX(-130%) scale(1.1);
+}
+
+.page-overlay .btn-bottom-right:hover {
+    transform: translateX(30%) scale(1.1);
+}
+
+/* Icon styles */
+.page-overlay .icon {
+    color: white;
+}
+
+.page-overlay .icon-lg {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.page-overlay .icon-md {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.page-card-outer[data-deleted="true"] {
+    opacity: 0.85;
+}
+
+.page-card-outer[data-deleted="true"] .page-thumbnail {
+    filter: grayscale(0.4) sepia(1) hue-rotate(320deg) saturate(5) brightness(0.7);
+}
+
+.page-card-outer[data-deleted="true"]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(220, 0, 0, 0.35);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.page-card-outer[data-modified="true"]:not([data-deleted="true"]) {
+    box-shadow: 0 0 0 3px var(--accent);
+}
+
+.page-card-outer[data-modified="true"]:not([data-deleted="true"]):hover {
+    box-shadow: 0 0 0 3px var(--accent), 0 4px 16px rgba(0,0,0,0.5);
+}
+
+.page-card-outer[data-deleted="true"]::after {
+    content: "DELETED";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-15deg);
+    background: #cc0000;
+    color: white;
+    padding: 10px 24px;
+    font-weight: bold;
+    font-size: 1.3em;
+    border-radius: 4px;
+    border: 2px solid #990000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Hide rotate and mirror buttons on deleted pages */
+.page-card-outer[data-deleted="true"] .page-overlay .btn-top-left,
+.page-card-outer[data-deleted="true"] .page-overlay .btn-top-right,
+.page-card-outer[data-deleted="true"] .page-overlay .btn-middle-left,
+.page-card-outer[data-deleted="true"] .page-overlay .btn-middle-right {
+    display: none !important;
+}
+
+.page-card-outer[data-modified="true"] .page-info::after {
+    content: "✏️";
+    margin-left: 4px;
+}
+
+/* Modal styles */
+.modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal .close {
+    position: absolute;
+    top: 20px;
+    right: 40px;
+    color: white;
+    font-size: 40px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color 0.2s;
+    background: none;
+    border: none;
+    padding: 0;
+    line-height: 1;
+}
+
+.modal .close:hover {
+    color: var(--accent);
+}
+
+#modal-img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+}
+
+/* Hide modification UI in readonly mode */
+body[data-readonly="true"] .page-overlay,
+body[data-readonly="true"] .controls,
+body[data-readonly="true"] .revert-btn,
+body[data-readonly="true"] .split-indicator,
+body[data-readonly="true"] button[onclick*="delete-all"],
+body[data-readonly="true"] button[onclick*="split"] {
+    display: none !important;
+}
+
+body[data-readonly="true"] #readonly-indicator {
+    display: block !important;
+}
+
+/* Document groups */
+.document-group {
+    margin-bottom: 40px;
+    transition: box-shadow 0.3s ease;
+}
+
+.document-group[data-modified="true"] {
+    box-shadow: 0 0 20px 4px rgba(74, 158, 255, 0.6), 0 0 40px 8px rgba(74, 158, 255, 0.3);
+}
+
+.document-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 12px;
+    background: var(--bg-card);
+    border-radius: 4px;
+}
+
+.document-color {
+    width: 4px;
+    height: 40px;
+    border-radius: 2px;
+}
+
+.document-title {
+    flex: 1;
+    font-size: 1.2em;
+    font-weight: 500;
+}
+
+.document-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.document-actions button {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--text-secondary);
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.2s;
+}
+
+.document-actions button:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+}

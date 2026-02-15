@@ -42,6 +42,7 @@ const cmd_add = @import("cmd/add.zig");
 const cmd_create = @import("cmd/create.zig");
 const cmd_attach = @import("cmd/attach.zig");
 const cmd_detach = @import("cmd/detach.zig");
+const cmd_webui = @import("cmd/webui.zig");
 
 const version = "0.1.0";
 
@@ -172,6 +173,8 @@ pub fn main() !void {
         .attach
     else if (std.mem.eql(u8, cmd_str, "detach"))
         .detach
+    else if (std.mem.eql(u8, cmd_str, "webui"))
+        .webui
     else if (std.mem.eql(u8, cmd_str, "download_pdfium"))
         .download_pdfium
     else {
@@ -217,6 +220,7 @@ pub fn main() !void {
         .create => try cmd_create.run(allocator, &cmd_arg_it, stdout, stderr),
         .attach => try cmd_attach.run(allocator, &cmd_arg_it, stdout, stderr),
         .detach => try cmd_detach.run(allocator, &cmd_arg_it, stdout, stderr),
+        .webui => try cmd_webui.run(allocator, &cmd_arg_it, stdout, stderr),
         .download_pdfium => unreachable, // Handled above
         .help => printMainUsage(stdout, pdfium.getVersion(), pdfium.getLibraryPath()),
         .version_cmd => try stdout.print("pdfzig {s}\n", .{version}),
