@@ -118,28 +118,6 @@ Run the built executable directly:
   - `setupTempFileForInPlaceEdit()` / `completeTempFileEdit()` - Handle temp file creation and rename for in-place editing
   - `generatePageContentOrExit()` / `generatePageContentWithNumOrExit()` - Generate page content or exit on error
 
-### WebUI
-
-- **src/webui/** - Web interface for visual PDF editing and manipulation
-  - **src/webui/assets/** - Static web assets (HTML, CSS, JS, favicons, icons)
-    - `index.html` - Main HTML template with `{READONLY}` placeholder
-    - `style.css` - CSS styling
-    - `app.js` - JavaScript frontend code
-    - `favicon.ico` and various PNG icons (16x16, 32x32, 48x48, apple-touch-icon, android-chrome)
-    - `site.webmanifest` - PWA manifest
-  - **src/webui/assets.zig** - Asset embedding using `@embedFile` directive
-    - All assets are compiled directly into the executable binary
-    - No external files needed at runtime
-  - **src/webui/routes.zig** - HTTP request routing and static asset serving
-    - Serves embedded assets with appropriate content types
-    - Handles API routes for document manipulation
-    - Template replacement for readonly mode flag
-  - **src/webui/server.zig** - HTTP server implementation
-  - **src/webui/state.zig** - Global state management for documents and pages
-  - **src/webui/operations.zig** - PDF operations (rotate, mirror, delete, reorder)
-  - **src/webui/page_renderer.zig** - Page thumbnail rendering with caching
-  - **src/webui/error_page.zig** - Error page rendering
-
 ### Dependencies
 
 - **PDFium** - Downloaded at runtime from bblanchon/pdfium-binaries. Dynamically loaded via `std.DynLib`. Library named `libpdfium_v{BUILD}.dylib/so/dll`.
@@ -270,7 +248,6 @@ zig build test
 
 - **Memory-first loading**: All PDF operations load the entire file into memory first using `FPDF_LoadMemDocument`. This enables buffer reuse between PDFium and XMP parsing, and provides a foundation for future optimizations. `FPDF_LoadDocument` has been removed.
 - **Document memory management**: The `Document` struct owns the PDF buffer for the document's lifetime. PDFium's `FPDF_LoadMemDocument` references the buffer without copying, so the buffer must remain valid until `FPDF_CloseDocument` is called. The `Document.close()` method frees both the PDFium handle and the owned buffer.
-- **WebUI memory optimization**: WebUI keeps two copies of each PDF (`doc_original` with original bytes, `doc` for modifications). When downloading an unmodified document, the original bytes are served directly from `doc_original.pdf_buffer` without creating a new PDF, preserving the exact original file including signatures.
 - **PDF/A detection**: Automatically detects PDF/A conformance by parsing XMP metadata directly from the PDF byte stream. Uses simple string matching (no XML library) since PDF/A requires XMP to be uncompressed and unencrypted.
 - **Library-independent metadata**: The `src/pdf/` module provides a generic `MetaData` struct that combines PDFium metadata with XMP-derived PDF/A conformance, abstracting implementation details.
 - PDFium outputs BGRA; conversion to RGBA (PNG) or RGB (JPEG) happens in pdfcontent/images.zig

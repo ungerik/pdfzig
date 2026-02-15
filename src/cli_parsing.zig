@@ -19,7 +19,6 @@ pub const Command = enum {
     create,
     attach,
     detach,
-    webui,
     download_pdfium,
     help,
     version_cmd,
