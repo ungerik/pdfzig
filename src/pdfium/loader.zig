@@ -287,11 +287,11 @@ pub fn findBestPdfiumLibrary(allocator: Allocator, search_dir: []const u8) !?Lib
     while (try it.next()) |entry| {
         if (entry.kind != .file) continue;
 
-        // Check if filename matches pattern: pdfium_v{VERSION}.{ext}
+        // Check if filename matches pattern: pdfium_v{VERSION}.{ext} or libpdfium_v{VERSION}.{ext}
         const name = entry.name;
 
-        // Check if it starts with "pdfium_v"
-        if (!std.mem.startsWith(u8, name, "pdfium_v")) continue;
+        // Check if it starts with "pdfium_v" or "libpdfium_v"
+        if (!std.mem.startsWith(u8, name, "pdfium_v") and !std.mem.startsWith(u8, name, "libpdfium_v")) continue;
 
         // Check if it ends with the correct extension
         if (!std.mem.endsWith(u8, name, ext)) continue;
