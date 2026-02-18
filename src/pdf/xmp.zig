@@ -95,3 +95,128 @@ fn isValidLevel(c: u8) bool {
     const lower = std.ascii.toLower(c);
     return lower == 'a' or lower == 'b' or lower == 'u' or lower == 'e' or lower == 'f';
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "extractPdfAConformance element syntax PDF/A-1b" {
+    const xmp =
+        \\<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        \\<x:xmpmeta xmlns:x="adobe:ns:meta/">
+        \\<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        \\<rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+        \\<pdfaid:part>1</pdfaid:part>
+        \\<pdfaid:conformance>b</pdfaid:conformance>
+        \\</rdf:Description>
+        \\</rdf:RDF>
+        \\</x:xmpmeta>
+        \\<?xpacket end="w"?>
+    ;
+    const result = extractPdfAConformance(xmp).?;
+    try std.testing.expectEqual(@as(u8, 1), result.part);
+    try std.testing.expectEqual(@as(u8, 'b'), result.level);
+}
+
+test "extractPdfAConformance element syntax PDF/A-2a" {
+    const xmp =
+        \\<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        \\<rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+        \\<pdfaid:part>2</pdfaid:part>
+        \\<pdfaid:conformance>a</pdfaid:conformance>
+        \\</rdf:Description>
+        \\<?xpacket end="w"?>
+    ;
+    const result = extractPdfAConformance(xmp).?;
+    try std.testing.expectEqual(@as(u8, 2), result.part);
+    try std.testing.expectEqual(@as(u8, 'a'), result.level);
+}
+
+test "extractPdfAConformance attribute syntax PDF/A-3u" {
+    const xmp =
+        \\<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        \\<rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"
+        \\ pdfaid:part="3" pdfaid:conformance="u"/>
+        \\<?xpacket end="w"?>
+    ;
+    const result = extractPdfAConformance(xmp).?;
+    try std.testing.expectEqual(@as(u8, 3), result.part);
+    try std.testing.expectEqual(@as(u8, 'u'), result.level);
+}
+
+test "extractPdfAConformance uppercase level normalized to lowercase" {
+    const xmp =
+        \\<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        \\<rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+        \\<pdfaid:part>1</pdfaid:part>
+        \\<pdfaid:conformance>B</pdfaid:conformance>
+        \\</rdf:Description>
+        \\<?xpacket end="w"?>
+    ;
+    const result = extractPdfAConformance(xmp).?;
+    try std.testing.expectEqual(@as(u8, 'b'), result.level);
+}
+
+test "extractPdfAConformance returns null for no XMP packet" {
+    try std.testing.expect(extractPdfAConformance("not a pdf") == null);
+}
+
+test "extractPdfAConformance returns null for XMP without pdfaid namespace" {
+    const xmp =
+        \\<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        \\<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/">
+        \\<dc:title>Test</dc:title>
+        \\</rdf:Description>
+        \\<?xpacket end="w"?>
+    ;
+    try std.testing.expect(extractPdfAConformance(xmp) == null);
+}
+
+test "extractPdfAConformance returns null for missing conformance level" {
+    const xmp =
+        \\<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        \\<rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+        \\<pdfaid:part>1</pdfaid:part>
+        \\</rdf:Description>
+        \\<?xpacket end="w"?>
+    ;
+    try std.testing.expect(extractPdfAConformance(xmp) == null);
+}
+
+test "extractPdfAConformance returns null for missing part" {
+    const xmp =
+        \\<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        \\<rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+        \\<pdfaid:conformance>b</pdfaid:conformance>
+        \\</rdf:Description>
+        \\<?xpacket end="w"?>
+    ;
+    try std.testing.expect(extractPdfAConformance(xmp) == null);
+}
+
+test "extractPdfAConformance PDF/A-4f" {
+    const xmp =
+        \\<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        \\<rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+        \\<pdfaid:part>4</pdfaid:part>
+        \\<pdfaid:conformance>f</pdfaid:conformance>
+        \\</rdf:Description>
+        \\<?xpacket end="w"?>
+    ;
+    const result = extractPdfAConformance(xmp).?;
+    try std.testing.expectEqual(@as(u8, 4), result.part);
+    try std.testing.expectEqual(@as(u8, 'f'), result.level);
+}
+
+test "isValidLevel" {
+    try std.testing.expect(isValidLevel('a'));
+    try std.testing.expect(isValidLevel('b'));
+    try std.testing.expect(isValidLevel('u'));
+    try std.testing.expect(isValidLevel('e'));
+    try std.testing.expect(isValidLevel('f'));
+    try std.testing.expect(isValidLevel('A'));
+    try std.testing.expect(isValidLevel('B'));
+    try std.testing.expect(!isValidLevel('c'));
+    try std.testing.expect(!isValidLevel('x'));
+    try std.testing.expect(!isValidLevel('1'));
+}
