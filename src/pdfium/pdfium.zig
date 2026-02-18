@@ -10,7 +10,10 @@ const pdf_loader = @import("../pdf/loader.zig");
 // Module-level library state
 var lib: ?loader.PdfiumLib = null;
 var lib_allocator: ?std.mem.Allocator = null;
-var lib_path: ?[]u8 = null;
+var lib_path: ?[]const u8 = null;
+
+/// Default PDF version for saving when no version is detected (PDF 1.7)
+const DEFAULT_PDF_VERSION: u32 = 17;
 
 // Page object types
 pub const PageObjectType = enum(c_int) {
@@ -34,26 +37,60 @@ pub const Error = error{
     LibraryLoadFailed,
 };
 
-/// Convert UTF-16LE to UTF-8
+/// Convert UTF-16LE to UTF-8, handling surrogate pairs for codepoints above U+FFFF
 fn utf16LeToUtf8(allocator: std.mem.Allocator, utf16: []const u16) ?[]u8 {
     // Calculate required UTF-8 length
     var utf8_len: usize = 0;
-    for (utf16) |code_unit| {
-        if (code_unit < 0x80) {
+    var idx: usize = 0;
+    while (idx < utf16.len) {
+        const code_unit = utf16[idx];
+        if (code_unit >= 0xD800 and code_unit <= 0xDBFF) {
+            // High surrogate - combine with low surrogate for 4-byte UTF-8
+            idx += 1;
+            if (idx < utf16.len and utf16[idx] >= 0xDC00 and utf16[idx] <= 0xDFFF) {
+                utf8_len += 4;
+            } else {
+                utf8_len += 3; // Unpaired surrogate, encode as-is (replacement)
+            }
+        } else if (code_unit < 0x80) {
             utf8_len += 1;
         } else if (code_unit < 0x800) {
             utf8_len += 2;
         } else {
             utf8_len += 3;
         }
+        idx += 1;
     }
 
     const utf8_buf = allocator.alloc(u8, utf8_len) catch return null;
     errdefer allocator.free(utf8_buf);
 
     var i: usize = 0;
-    for (utf16) |code_unit| {
-        if (code_unit < 0x80) {
+    idx = 0;
+    while (idx < utf16.len) {
+        const code_unit = utf16[idx];
+        if (code_unit >= 0xD800 and code_unit <= 0xDBFF) {
+            // High surrogate
+            idx += 1;
+            if (idx < utf16.len and utf16[idx] >= 0xDC00 and utf16[idx] <= 0xDFFF) {
+                // Valid surrogate pair - decode to codepoint
+                const codepoint: u21 = 0x10000 +
+                    (@as(u21, code_unit - 0xD800) << 10) +
+                    @as(u21, utf16[idx] - 0xDC00);
+                utf8_buf[i] = @intCast(0xF0 | (codepoint >> 18));
+                utf8_buf[i + 1] = @intCast(0x80 | ((codepoint >> 12) & 0x3F));
+                utf8_buf[i + 2] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+                utf8_buf[i + 3] = @intCast(0x80 | (codepoint & 0x3F));
+                i += 4;
+            } else {
+                // Unpaired high surrogate - encode the raw value as 3-byte UTF-8
+                utf8_buf[i] = @intCast(0xE0 | (code_unit >> 12));
+                utf8_buf[i + 1] = @intCast(0x80 | ((code_unit >> 6) & 0x3F));
+                utf8_buf[i + 2] = @intCast(0x80 | (code_unit & 0x3F));
+                i += 3;
+                continue; // Don't advance idx again
+            }
+        } else if (code_unit < 0x80) {
             utf8_buf[i] = @intCast(code_unit);
             i += 1;
         } else if (code_unit < 0x800) {
@@ -66,6 +103,7 @@ fn utf16LeToUtf8(allocator: std.mem.Allocator, utf16: []const u16) ?[]u8 {
             utf8_buf[i + 2] = @intCast(0x80 | (code_unit & 0x3F));
             i += 3;
         }
+        idx += 1;
     }
 
     return utf8_buf;
@@ -92,7 +130,9 @@ pub fn init() Error!void {
     return initWithAllocator(std.heap.page_allocator);
 }
 
-/// Initialize from a specific library path
+/// Initialize from a specific library path.
+/// The caller must keep the path memory alive for the lifetime of the library
+/// (typically a long-lived CLI argument). The path is not duplicated.
 pub fn initWithPath(path: []const u8) Error!void {
     if (lib != null) return; // Already initialized
 
@@ -100,6 +140,7 @@ pub fn initWithPath(path: []const u8) Error!void {
         return Error.LibraryLoadFailed;
     };
     lib.?.FPDF_InitLibrary();
+    lib_path = path;
 }
 
 /// Initialize with a specific allocator
@@ -301,7 +342,7 @@ pub const Document = struct {
     /// Import a range of pages from another document using a page range string
     /// page_range: e.g., "1-3,5,7-9" (1-based), or null for all pages
     /// insert_index: 0-based index where to insert pages in this document
-    pub fn importPagesRange(self: *Document, src_doc: *Document, page_range: ?[]const u8, insert_index: u32) bool {
+    pub fn importPagesRange(self: *Document, src_doc: *Document, page_range: ?[]const u8, insert_index: usize) bool {
         const l = lib orelse return false;
         if (page_range) |range| {
             var range_buf: [256]u8 = undefined;
@@ -325,14 +366,14 @@ pub const Document = struct {
     }
 
     /// Get the total number of pages in the document
-    pub fn getPageCount(self: Document) u32 {
+    pub fn getPageCount(self: Document) usize {
         const l = lib orelse return 0;
         const count = l.FPDF_GetPageCount(self.handle);
         return if (count < 0) 0 else @intCast(count);
     }
 
     /// Load a page by index (0-based)
-    pub fn loadPage(self: Document, page_index: u32) Error!Page {
+    pub fn loadPage(self: Document, page_index: usize) Error!Page {
         const l = lib orelse return Error.LibraryNotLoaded;
         const handle = l.FPDF_LoadPage(self.handle, @intCast(page_index));
         if (handle == null) {
@@ -463,8 +504,36 @@ pub const Document = struct {
         var name_utf16 = std.array_list.Managed(u16).init(allocator);
         defer name_utf16.deinit();
 
-        for (name) |byte| {
-            name_utf16.append(@as(u16, byte)) catch return Error.Unknown;
+        var i: usize = 0;
+        while (i < name.len) {
+            const byte = name[i];
+            if (byte < 0x80) {
+                // ASCII
+                name_utf16.append(@as(u16, byte)) catch return Error.Unknown;
+                i += 1;
+            } else if (byte < 0xC0) {
+                return Error.Unknown; // Invalid start byte
+            } else if (byte < 0xE0) {
+                // 2-byte sequence
+                if (i + 1 >= name.len) return Error.Unknown;
+                const cp: u16 = (@as(u16, byte & 0x1F) << 6) | @as(u16, name[i + 1] & 0x3F);
+                name_utf16.append(cp) catch return Error.Unknown;
+                i += 2;
+            } else if (byte < 0xF0) {
+                // 3-byte sequence
+                if (i + 2 >= name.len) return Error.Unknown;
+                const cp: u16 = (@as(u16, byte & 0x0F) << 12) | (@as(u16, name[i + 1] & 0x3F) << 6) | @as(u16, name[i + 2] & 0x3F);
+                name_utf16.append(cp) catch return Error.Unknown;
+                i += 3;
+            } else {
+                // 4-byte sequence -> UTF-16 surrogate pair
+                if (i + 3 >= name.len) return Error.Unknown;
+                const cp: u21 = (@as(u21, byte & 0x07) << 18) | (@as(u21, name[i + 1] & 0x3F) << 12) | (@as(u21, name[i + 2] & 0x3F) << 6) | @as(u21, name[i + 3] & 0x3F);
+                const adjusted = cp - 0x10000;
+                name_utf16.append(@intCast(0xD800 + (adjusted >> 10))) catch return Error.Unknown;
+                name_utf16.append(@intCast(0xDC00 + (adjusted & 0x3FF))) catch return Error.Unknown;
+                i += 4;
+            }
         }
         name_utf16.append(0) catch return Error.Unknown; // Null terminator
 
@@ -493,7 +562,7 @@ pub const Document = struct {
     }
 
     /// Delete a page from the document (0-indexed)
-    pub fn deletePage(self: Document, page_index: u32) Error!void {
+    pub fn deletePage(self: Document, page_index: usize) Error!void {
         const l = lib orelse return Error.LibraryNotLoaded;
         const page_count = self.getPageCount();
         if (page_index >= page_count) {
@@ -504,7 +573,7 @@ pub const Document = struct {
 
     /// Create a new page at the specified index
     /// Returns a Page handle that must be closed when done
-    pub fn createPage(self: Document, page_index: u32, width: f64, height: f64) Error!Page {
+    pub fn createPage(self: Document, page_index: usize, width: f64, height: f64) Error!Page {
         const l = lib orelse return Error.LibraryNotLoaded;
         const handle = l.FPDFPage_New(self.handle, @intCast(page_index), width, height);
         if (handle == null) {
@@ -529,41 +598,49 @@ pub const Document = struct {
     /// Times-Roman, Times-Bold, Times-BoldItalic, Times-Italic, Symbol, ZapfDingbats
     pub fn createTextObject(self: Document, font_name: []const u8, font_size: f32) Error!PageObject {
         const l = lib orelse return Error.LibraryNotLoaded;
-        const handle = l.FPDFPageObj_NewTextObj(self.handle, font_name.ptr, font_size);
+        // Null-terminate the font name for the C API
+        var name_buf: [128]u8 = undefined;
+        if (font_name.len >= name_buf.len) return Error.Unknown;
+        @memcpy(name_buf[0..font_name.len], font_name);
+        name_buf[font_name.len] = 0;
+        const handle = l.FPDFPageObj_NewTextObj(self.handle, &name_buf, font_size);
         if (handle == null) {
             return Error.Unknown;
         }
         return .{ .handle = handle };
     }
 
+    /// File write context for PDFium save operations
+    const FileWriteContext = struct {
+        fw: loader.FPDF_FILEWRITE,
+        file: std.fs.File,
+
+        fn init(file: std.fs.File) FileWriteContext {
+            return .{
+                .fw = .{
+                    .version = 1,
+                    .WriteBlock = writeBlock,
+                },
+                .file = file,
+            };
+        }
+
+        fn writeBlock(pThis: *loader.FPDF_FILEWRITE, pData: ?*const anyopaque, size: c_ulong) callconv(.c) c_int {
+            const ctx: *FileWriteContext = @fieldParentPtr("fw", pThis);
+            const data: [*]const u8 = @ptrCast(pData orelse return 0);
+            ctx.file.writeAll(data[0..size]) catch return 0;
+            return 1;
+        }
+    };
+
     /// Save the document to a file
     pub fn save(self: Document, path: []const u8) Error!void {
         const l = lib orelse return Error.LibraryNotLoaded;
 
-        // Open file for writing
         const file = std.fs.cwd().createFile(path, .{}) catch return Error.FileNotFound;
         defer file.close();
 
-        // Create file write context with FPDF_FILEWRITE as first field
-        const FileWriteContext = struct {
-            fw: loader.FPDF_FILEWRITE,
-            file: std.fs.File,
-
-            fn writeBlock(pThis: *loader.FPDF_FILEWRITE, pData: ?*const anyopaque, size: c_ulong) callconv(.c) c_int {
-                const ctx: *@This() = @fieldParentPtr("fw", pThis);
-                const data: [*]const u8 = @ptrCast(pData orelse return 0);
-                ctx.file.writeAll(data[0..size]) catch return 0;
-                return 1; // Success
-            }
-        };
-
-        var ctx = FileWriteContext{
-            .fw = .{
-                .version = 1,
-                .WriteBlock = FileWriteContext.writeBlock,
-            },
-            .file = file,
-        };
+        var ctx = FileWriteContext.init(file);
 
         if (l.FPDF_SaveAsCopy(self.handle, &ctx.fw, 0) == 0) {
             return Error.Unknown;
@@ -574,152 +651,18 @@ pub const Document = struct {
     pub fn saveWithVersion(self: Document, path: []const u8, version: ?u32) Error!void {
         const l = lib orelse return Error.LibraryNotLoaded;
 
-        // Get current version if not specified
-        const file_version: c_int = if (version) |v| @intCast(v) else @intCast(self.getFileVersion() orelse 17);
+        const file_version: c_int = if (version) |v| @intCast(v) else @intCast(self.getFileVersion() orelse DEFAULT_PDF_VERSION);
 
-        // Open file for writing
         const file = std.fs.cwd().createFile(path, .{}) catch return Error.FileNotFound;
         defer file.close();
 
-        const FileWriteContext = struct {
-            fw: loader.FPDF_FILEWRITE,
-            file: std.fs.File,
-
-            fn writeBlock(pThis: *loader.FPDF_FILEWRITE, pData: ?*const anyopaque, size: c_ulong) callconv(.c) c_int {
-                const ctx: *@This() = @fieldParentPtr("fw", pThis);
-                const data: [*]const u8 = @ptrCast(pData orelse return 0);
-                ctx.file.writeAll(data[0..size]) catch return 0;
-                return 1;
-            }
-        };
-
-        var ctx = FileWriteContext{
-            .fw = .{
-                .version = 1,
-                .WriteBlock = FileWriteContext.writeBlock,
-            },
-            .file = file,
-        };
+        var ctx = FileWriteContext.init(file);
 
         if (l.FPDF_SaveWithVersion(self.handle, &ctx.fw, 0, file_version) == 0) {
             return Error.Unknown;
         }
     }
 };
-
-/// Extended Metadata struct with document properties
-pub const ExtendedMetadata = struct {
-    // Metadata fields (same as Metadata struct)
-    title: ?[]u8 = null,
-    author: ?[]u8 = null,
-    subject: ?[]u8 = null,
-    keywords: ?[]u8 = null,
-    creator: ?[]u8 = null,
-    producer: ?[]u8 = null,
-    creation_date: ?[]u8 = null,
-    mod_date: ?[]u8 = null,
-
-    // Document properties
-    page_count: u32 = 0,
-    pdf_version: ?[]u8 = null,
-    encrypted: bool = false,
-    security_handler_revision: ?i32 = null,
-
-    pub fn deinit(self: *ExtendedMetadata, allocator: std.mem.Allocator) void {
-        if (self.title) |t| allocator.free(t);
-        if (self.author) |a| allocator.free(a);
-        if (self.subject) |s| allocator.free(s);
-        if (self.keywords) |k| allocator.free(k);
-        if (self.creator) |c| allocator.free(c);
-        if (self.producer) |p| allocator.free(p);
-        if (self.creation_date) |cd| allocator.free(cd);
-        if (self.mod_date) |md| allocator.free(md);
-        if (self.pdf_version) |v| allocator.free(v);
-        self.* = .{};
-    }
-};
-
-/// Extract metadata from PDF in memory buffer
-pub fn extractMetadataFromMemory(
-    allocator: std.mem.Allocator,
-    pdf_bytes: []const u8,
-    password: ?[]const u8,
-) !ExtendedMetadata {
-    const l = lib orelse return Error.LibraryNotLoaded;
-
-    // Prepare null-terminated password if provided
-    var pass_buf: [256]u8 = undefined;
-    const pwd_ptr: ?[*:0]const u8 = if (password) |pwd| blk: {
-        if (pwd.len >= pass_buf.len) return Error.PasswordRequired;
-        @memcpy(pass_buf[0..pwd.len], pwd);
-        pass_buf[pwd.len] = 0;
-        break :blk @ptrCast(&pass_buf);
-    } else null;
-
-    // Open PDF from memory
-    const doc_handle = l.FPDF_LoadMemDocument(
-        pdf_bytes.ptr,
-        @intCast(pdf_bytes.len),
-        pwd_ptr,
-    ) orelse return getLastError();
-    defer l.FPDF_CloseDocument(doc_handle);
-
-    var metadata = ExtendedMetadata{};
-    errdefer metadata.deinit(allocator);
-
-    // Extract standard metadata
-    metadata.title = getMetaTextFromHandle(allocator, &l, doc_handle, "Title");
-    metadata.author = getMetaTextFromHandle(allocator, &l, doc_handle, "Author");
-    metadata.subject = getMetaTextFromHandle(allocator, &l, doc_handle, "Subject");
-    metadata.keywords = getMetaTextFromHandle(allocator, &l, doc_handle, "Keywords");
-    metadata.creator = getMetaTextFromHandle(allocator, &l, doc_handle, "Creator");
-    metadata.producer = getMetaTextFromHandle(allocator, &l, doc_handle, "Producer");
-    metadata.creation_date = getMetaTextFromHandle(allocator, &l, doc_handle, "CreationDate");
-    metadata.mod_date = getMetaTextFromHandle(allocator, &l, doc_handle, "ModDate");
-
-    // Extract document properties
-    metadata.page_count = @intCast(l.FPDF_GetPageCount(doc_handle));
-
-    var pdf_version: c_int = 0;
-    if (l.FPDF_GetFileVersion(doc_handle, &pdf_version) != 0) {
-        metadata.pdf_version = try std.fmt.allocPrint(
-            allocator,
-            "{d}.{d}",
-            .{ @divFloor(pdf_version, 10), @mod(pdf_version, 10) },
-        );
-    }
-
-    const security_revision = l.FPDF_GetSecurityHandlerRevision(doc_handle);
-    metadata.encrypted = security_revision != -1;
-    if (metadata.encrypted) {
-        metadata.security_handler_revision = security_revision;
-    }
-
-    return metadata;
-}
-
-/// Helper to get metadata text from document handle
-fn getMetaTextFromHandle(
-    allocator: std.mem.Allocator,
-    l: *const loader.PdfiumLib,
-    doc: loader.FPDF_DOCUMENT,
-    tag: []const u8,
-) ?[]u8 {
-    var tag_buf: [64]u8 = undefined;
-    if (tag.len >= tag_buf.len) return null;
-    @memcpy(tag_buf[0..tag.len], tag);
-    tag_buf[tag.len] = 0;
-
-    const required_len = l.FPDF_GetMetaText(doc, &tag_buf, null, 0);
-    if (required_len <= 2) return null;
-
-    const utf16_buf = allocator.alloc(u16, required_len / 2) catch return null;
-    defer allocator.free(utf16_buf);
-
-    _ = l.FPDF_GetMetaText(doc, &tag_buf, @ptrCast(utf16_buf.ptr), required_len);
-
-    return utf16LeToUtf8(allocator, utf16_buf[0 .. (required_len / 2) - 1]);
-}
 
 /// A PDF page handle
 pub const Page = struct {
@@ -832,12 +775,11 @@ pub const Page = struct {
 
         /// Convert degrees to rotation enum
         pub fn fromDegrees(degrees: i32) ?Rotation {
-            const normalized = @mod(degrees, 360);
-            return switch (normalized) {
+            return switch (@mod(degrees, 360)) {
                 0 => .none,
-                90, -270 => .cw90,
-                180, -180 => .cw180,
-                270, -90 => .cw270,
+                90 => .cw90,
+                180 => .cw180,
+                270 => .cw270,
                 else => null,
             };
         }
@@ -1283,26 +1225,17 @@ pub const Attachment = struct {
             return null;
         }
 
-        return buffer[0..actual_len];
-    }
-
-    /// Check if this attachment is an XML file (by extension)
-    pub fn isXml(self: Attachment, allocator: std.mem.Allocator) bool {
-        const name = self.getName(allocator) orelse return false;
-        defer allocator.free(name);
-
-        const lower_name = allocator.alloc(u8, name.len) catch return false;
-        defer allocator.free(lower_name);
-
-        for (name, 0..) |char, i| {
-            lower_name[i] = std.ascii.toLower(char);
+        // Shrink to actual size so caller can free correctly
+        if (actual_len < out_buflen) {
+            const result = allocator.alloc(u8, actual_len) catch {
+                allocator.free(buffer);
+                return null;
+            };
+            @memcpy(result, buffer[0..actual_len]);
+            allocator.free(buffer);
+            return result;
         }
-
-        return std.mem.endsWith(u8, lower_name, ".xml") or
-            std.mem.endsWith(u8, lower_name, ".xmp") or
-            std.mem.endsWith(u8, lower_name, ".xsd") or
-            std.mem.endsWith(u8, lower_name, ".xsl") or
-            std.mem.endsWith(u8, lower_name, ".xslt");
+        return buffer;
     }
 };
 

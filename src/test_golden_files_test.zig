@@ -5,13 +5,91 @@ const std = @import("std");
 const pdfium = @import("pdfium/pdfium.zig");
 const visual_compare = @import("test_visual_compare.zig");
 const test_golden = @import("test_golden_files.zig");
+const images = @import("pdfcontent/images.zig");
 
 // Import constants from golden file generator (single source of truth)
 const TARGET_PIXEL_COUNT = test_golden.TARGET_PIXEL_COUNT;
 const PIXEL_TOLERANCE = test_golden.PIXEL_TOLERANCE;
 
+/// Discover all PDF filenames in test-files/input/
+fn discoverTestPdfs(allocator: std.mem.Allocator) ![][]const u8 {
+    var pdf_list = std.array_list.Managed([]const u8).init(allocator);
+    errdefer {
+        for (pdf_list.items) |item| allocator.free(item);
+        pdf_list.deinit();
+    }
+
+    var input_dir = std.fs.cwd().openDir("test-files/input", .{ .iterate = true }) catch {
+        return pdf_list.toOwnedSlice();
+    };
+    defer input_dir.close();
+
+    var iter = input_dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".pdf")) continue;
+        try pdf_list.append(try allocator.dupe(u8, entry.name));
+    }
+
+    return pdf_list.toOwnedSlice();
+}
+
+/// Render a page to a temp PNG, compare against a golden file.
+/// operation_setup is called with the page before rendering to apply transformations.
+fn compareRenderedPageWithGolden(
+    allocator: std.mem.Allocator,
+    doc: *pdfium.Document,
+    page_idx: usize,
+    pdf_basename: []const u8,
+    pdf_filename: []const u8,
+    temp_prefix: []const u8,
+    golden_subdir: []const u8,
+) !void {
+    var page = try doc.loadPage(page_idx);
+    defer page.close();
+
+    // Calculate dimensions (same as golden file generation)
+    const dims = test_golden.calculateTargetDimensions(page.getWidth(), page.getHeight());
+
+    var bitmap = try pdfium.Bitmap.create(dims.width, dims.height, .bgra);
+    defer bitmap.destroy();
+
+    bitmap.fillWhite();
+    page.render(&bitmap, .{});
+
+    const temp_path = try std.fmt.allocPrint(
+        allocator,
+        "test-cache/temp-{s}-{s}-page-{d}.png",
+        .{ pdf_basename, temp_prefix, page_idx + 1 },
+    );
+    defer allocator.free(temp_path);
+
+    std.fs.cwd().makeDir("test-cache") catch |err| {
+        if (err != error.PathAlreadyExists) return err;
+    };
+
+    try images.writeBitmap(allocator, bitmap, temp_path, .{ .format = .png });
+    defer std.fs.cwd().deleteFile(temp_path) catch {};
+
+    const golden_path = try std.fmt.allocPrint(
+        allocator,
+        "test-files/expected/{s}/{s}/page-{d}.png",
+        .{ pdf_basename, golden_subdir, page_idx + 1 },
+    );
+    defer allocator.free(golden_path);
+
+    const diff = try visual_compare.comparePngFiles(allocator, temp_path, golden_path);
+
+    if (!diff.withinTolerance(PIXEL_TOLERANCE)) {
+        std.debug.print(
+            "{s} page {d} of {s} differs from golden file: {any}\n",
+            .{ golden_subdir, page_idx + 1, pdf_filename, diff },
+        );
+        return error.TestFailed;
+    }
+}
+
 test "render page bitmaps matches golden files" {
-    // Skip if PDFium is not available (without triggering download)
     if (!pdfium.isAvailable()) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -19,12 +97,15 @@ test "render page bitmaps matches golden files" {
     try pdfium.init();
     defer pdfium.deinit();
 
-    const test_pdfs = [_][]const u8{ "1Page.pdf", "7Pages.pdf" };
+    const test_pdfs = try discoverTestPdfs(allocator);
+    defer {
+        for (test_pdfs) |name| allocator.free(name);
+        allocator.free(test_pdfs);
+    }
 
     for (test_pdfs) |pdf_filename| {
         const pdf_basename = std.fs.path.stem(pdf_filename);
 
-        // Open PDF
         const pdf_path = try std.fmt.allocPrint(allocator, "test-files/input/{s}", .{pdf_filename});
         defer allocator.free(pdf_path);
 
@@ -33,63 +114,21 @@ test "render page bitmaps matches golden files" {
 
         const page_count = doc.getPageCount();
 
-        // Render each page and compare with golden file
         for (0..page_count) |page_idx| {
-            var page = try doc.loadPage(@intCast(page_idx));
-            defer page.close();
-
-            // Calculate dimensions (same as golden file generation)
-            const dims = test_golden.calculateTargetDimensions(page.getWidth(), page.getHeight());
-
-            // Render to bitmap
-            var bitmap = try pdfium.Bitmap.create(dims.width, dims.height, .bgra);
-            defer bitmap.destroy();
-
-            bitmap.fillWhite();
-            page.render(&bitmap, .{});
-
-            // Write to temporary file
-            const temp_path = try std.fmt.allocPrint(
+            try compareRenderedPageWithGolden(
                 allocator,
-                "test-cache/temp-{s}-page-{d}.png",
-                .{ pdf_basename, page_idx + 1 },
+                &doc,
+                page_idx,
+                pdf_basename,
+                pdf_filename,
+                "render",
+                "render-page-bitmaps",
             );
-            defer allocator.free(temp_path);
-
-            // Ensure test-cache directory exists
-            std.fs.cwd().makeDir("test-cache") catch |err| {
-                if (err != error.PathAlreadyExists) return err;
-            };
-
-            const images = @import("pdfcontent/images.zig");
-            try images.writeBitmap(bitmap, temp_path, .{ .format = .png });
-            defer std.fs.cwd().deleteFile(temp_path) catch {};
-
-            // Compare with golden file
-            const golden_path = try std.fmt.allocPrint(
-                allocator,
-                "test-files/expected/{s}/render-page-bitmaps/page-{d}.png",
-                .{ pdf_basename, page_idx + 1 },
-            );
-            defer allocator.free(golden_path);
-
-            // Pixel-level comparison
-            const diff = try visual_compare.comparePngFiles(allocator, temp_path, golden_path);
-
-            // Assert within tolerance
-            if (!diff.withinTolerance(PIXEL_TOLERANCE)) {
-                std.debug.print(
-                    "Page {d} of {s} differs from golden file: {any}\n",
-                    .{ page_idx + 1, pdf_filename, diff },
-                );
-                return error.TestFailed;
-            }
         }
     }
 }
 
 test "rotate 90 matches golden files" {
-    // Skip if PDFium is not available (without triggering download)
     if (!pdfium.isAvailable()) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -97,7 +136,11 @@ test "rotate 90 matches golden files" {
     try pdfium.init();
     defer pdfium.deinit();
 
-    const test_pdfs = [_][]const u8{ "1Page.pdf", "7Pages.pdf" };
+    const test_pdfs = try discoverTestPdfs(allocator);
+    defer {
+        for (test_pdfs) |name| allocator.free(name);
+        allocator.free(test_pdfs);
+    }
 
     for (test_pdfs) |pdf_filename| {
         const pdf_basename = std.fs.path.stem(pdf_filename);
@@ -111,13 +154,11 @@ test "rotate 90 matches golden files" {
         const page_count = doc.getPageCount();
 
         for (0..page_count) |page_idx| {
-            var page = try doc.loadPage(@intCast(page_idx));
+            var page = try doc.loadPage(page_idx);
             defer page.close();
 
-            // Rotate 90° (same as golden file generation)
             _ = page.rotate(90);
 
-            // Calculate dimensions (same as golden file generation)
             const dims = test_golden.calculateTargetDimensions(page.getWidth(), page.getHeight());
 
             var bitmap = try pdfium.Bitmap.create(dims.width, dims.height, .bgra);
@@ -137,8 +178,7 @@ test "rotate 90 matches golden files" {
                 if (err != error.PathAlreadyExists) return err;
             };
 
-            const images = @import("pdfcontent/images.zig");
-            try images.writeBitmap(bitmap, temp_path, .{ .format = .png });
+            try images.writeBitmap(allocator, bitmap, temp_path, .{ .format = .png });
             defer std.fs.cwd().deleteFile(temp_path) catch {};
 
             const golden_path = try std.fmt.allocPrint(
@@ -162,7 +202,6 @@ test "rotate 90 matches golden files" {
 }
 
 test "rotate 180 matches golden files" {
-    // Skip if PDFium is not available (without triggering download)
     if (!pdfium.isAvailable()) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -170,7 +209,11 @@ test "rotate 180 matches golden files" {
     try pdfium.init();
     defer pdfium.deinit();
 
-    const test_pdfs = [_][]const u8{ "1Page.pdf", "7Pages.pdf" };
+    const test_pdfs = try discoverTestPdfs(allocator);
+    defer {
+        for (test_pdfs) |name| allocator.free(name);
+        allocator.free(test_pdfs);
+    }
 
     for (test_pdfs) |pdf_filename| {
         const pdf_basename = std.fs.path.stem(pdf_filename);
@@ -184,13 +227,11 @@ test "rotate 180 matches golden files" {
         const page_count = doc.getPageCount();
 
         for (0..page_count) |page_idx| {
-            var page = try doc.loadPage(@intCast(page_idx));
+            var page = try doc.loadPage(page_idx);
             defer page.close();
 
-            // Rotate 180° (same as golden file generation)
             _ = page.rotate(180);
 
-            // Calculate dimensions (same as golden file generation)
             const dims = test_golden.calculateTargetDimensions(page.getWidth(), page.getHeight());
 
             var bitmap = try pdfium.Bitmap.create(dims.width, dims.height, .bgra);
@@ -210,8 +251,7 @@ test "rotate 180 matches golden files" {
                 if (err != error.PathAlreadyExists) return err;
             };
 
-            const images = @import("pdfcontent/images.zig");
-            try images.writeBitmap(bitmap, temp_path, .{ .format = .png });
+            try images.writeBitmap(allocator, bitmap, temp_path, .{ .format = .png });
             defer std.fs.cwd().deleteFile(temp_path) catch {};
 
             const golden_path = try std.fmt.allocPrint(
@@ -235,7 +275,6 @@ test "rotate 180 matches golden files" {
 }
 
 test "rotate 270 matches golden files" {
-    // Skip if PDFium is not available (without triggering download)
     if (!pdfium.isAvailable()) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -243,7 +282,11 @@ test "rotate 270 matches golden files" {
     try pdfium.init();
     defer pdfium.deinit();
 
-    const test_pdfs = [_][]const u8{ "1Page.pdf", "7Pages.pdf" };
+    const test_pdfs = try discoverTestPdfs(allocator);
+    defer {
+        for (test_pdfs) |name| allocator.free(name);
+        allocator.free(test_pdfs);
+    }
 
     for (test_pdfs) |pdf_filename| {
         const pdf_basename = std.fs.path.stem(pdf_filename);
@@ -257,13 +300,11 @@ test "rotate 270 matches golden files" {
         const page_count = doc.getPageCount();
 
         for (0..page_count) |page_idx| {
-            var page = try doc.loadPage(@intCast(page_idx));
+            var page = try doc.loadPage(page_idx);
             defer page.close();
 
-            // Rotate 270° (same as golden file generation)
             _ = page.rotate(270);
 
-            // Calculate dimensions (same as golden file generation)
             const dims = test_golden.calculateTargetDimensions(page.getWidth(), page.getHeight());
 
             var bitmap = try pdfium.Bitmap.create(dims.width, dims.height, .bgra);
@@ -283,8 +324,7 @@ test "rotate 270 matches golden files" {
                 if (err != error.PathAlreadyExists) return err;
             };
 
-            const images = @import("pdfcontent/images.zig");
-            try images.writeBitmap(bitmap, temp_path, .{ .format = .png });
+            try images.writeBitmap(allocator, bitmap, temp_path, .{ .format = .png });
             defer std.fs.cwd().deleteFile(temp_path) catch {};
 
             const golden_path = try std.fmt.allocPrint(
@@ -308,7 +348,6 @@ test "rotate 270 matches golden files" {
 }
 
 test "mirror horizontal matches golden files" {
-    // Skip if PDFium is not available (without triggering download)
     if (!pdfium.isAvailable()) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -316,7 +355,11 @@ test "mirror horizontal matches golden files" {
     try pdfium.init();
     defer pdfium.deinit();
 
-    const test_pdfs = [_][]const u8{ "1Page.pdf", "7Pages.pdf" };
+    const test_pdfs = try discoverTestPdfs(allocator);
+    defer {
+        for (test_pdfs) |name| allocator.free(name);
+        allocator.free(test_pdfs);
+    }
 
     for (test_pdfs) |pdf_filename| {
         const pdf_basename = std.fs.path.stem(pdf_filename);
@@ -330,7 +373,7 @@ test "mirror horizontal matches golden files" {
         const page_count = doc.getPageCount();
 
         for (0..page_count) |page_idx| {
-            var page = try doc.loadPage(@intCast(page_idx));
+            var page = try doc.loadPage(page_idx);
             defer page.close();
 
             // Apply horizontal mirror transformation
@@ -363,8 +406,7 @@ test "mirror horizontal matches golden files" {
                 if (err != error.PathAlreadyExists) return err;
             };
 
-            const images = @import("pdfcontent/images.zig");
-            try images.writeBitmap(bitmap, temp_path, .{ .format = .png });
+            try images.writeBitmap(allocator, bitmap, temp_path, .{ .format = .png });
             defer std.fs.cwd().deleteFile(temp_path) catch {};
 
             const golden_path = try std.fmt.allocPrint(
@@ -388,7 +430,6 @@ test "mirror horizontal matches golden files" {
 }
 
 test "mirror vertical matches golden files" {
-    // Skip if PDFium is not available (without triggering download)
     if (!pdfium.isAvailable()) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -396,7 +437,11 @@ test "mirror vertical matches golden files" {
     try pdfium.init();
     defer pdfium.deinit();
 
-    const test_pdfs = [_][]const u8{ "1Page.pdf", "7Pages.pdf" };
+    const test_pdfs = try discoverTestPdfs(allocator);
+    defer {
+        for (test_pdfs) |name| allocator.free(name);
+        allocator.free(test_pdfs);
+    }
 
     for (test_pdfs) |pdf_filename| {
         const pdf_basename = std.fs.path.stem(pdf_filename);
@@ -410,7 +455,7 @@ test "mirror vertical matches golden files" {
         const page_count = doc.getPageCount();
 
         for (0..page_count) |page_idx| {
-            var page = try doc.loadPage(@intCast(page_idx));
+            var page = try doc.loadPage(page_idx);
             defer page.close();
 
             // Apply vertical mirror transformation
@@ -443,8 +488,7 @@ test "mirror vertical matches golden files" {
                 if (err != error.PathAlreadyExists) return err;
             };
 
-            const images = @import("pdfcontent/images.zig");
-            try images.writeBitmap(bitmap, temp_path, .{ .format = .png });
+            try images.writeBitmap(allocator, bitmap, temp_path, .{ .format = .png });
             defer std.fs.cwd().deleteFile(temp_path) catch {};
 
             const golden_path = try std.fmt.allocPrint(
@@ -468,9 +512,15 @@ test "mirror vertical matches golden files" {
 }
 
 test "info plaintext matches golden files" {
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
-    const test_pdfs = [_][]const u8{ "1Page.pdf", "7Pages.pdf" };
+    const test_pdfs = try discoverTestPdfs(allocator);
+    defer {
+        for (test_pdfs) |name| allocator.free(name);
+        allocator.free(test_pdfs);
+    }
 
     for (test_pdfs) |pdf_filename| {
         const pdf_basename = std.fs.path.stem(pdf_filename);
@@ -508,9 +558,15 @@ test "info plaintext matches golden files" {
 }
 
 test "info JSON matches golden files" {
+    if (!pdfium.isAvailable()) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
-    const test_pdfs = [_][]const u8{ "1Page.pdf", "7Pages.pdf" };
+    const test_pdfs = try discoverTestPdfs(allocator);
+    defer {
+        for (test_pdfs) |name| allocator.free(name);
+        allocator.free(test_pdfs);
+    }
 
     for (test_pdfs) |pdf_filename| {
         const pdf_basename = std.fs.path.stem(pdf_filename);

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pdfzig is a Zig CLI tool that uses PDFium to work with PDF files. It supports rendering pages to PNG/JPEG images, extracting text, extracting embedded images, extracting attachments, visual diff comparison, and displaying PDF metadata.
+pdfzig is a Zig PDF library and CLI tool that uses PDFium to work with PDF files. It supports rendering pages to PNG/JPEG images, extracting text, extracting embedded images, extracting attachments, visual diff comparison, and displaying PDF metadata. The project is structured as both a library (`@import("pdfzig")`) and a CLI tool.
 
 ## Build Commands
 
@@ -56,9 +56,11 @@ Run the built executable directly:
 
 ### Directory Structure
 
+- **src/root.zig** - Library root, re-exports all public modules for `@import("pdfzig")`
 - **src/main.zig** - CLI entry point with subcommand dispatch
 - **src/cli_parsing.zig** - CLI argument parsing utilities and shared types
-- **src/cmd/** - Command implementations (one file per command)
+- **src/cli/** - CLI command implementations (arg parsing, stdout/stderr, process.exit)
+- **src/pdfzig/** - Pure library functions (error-returning, no stdout/stderr, no process.exit)
 - **src/pdf/** - Library-independent PDF metadata module (MetaData struct, XMP parsing, PDF/A detection)
 - **src/pdfium/** - PDFium bindings and library management (memory-based loading)
 - **src/pdfcontent/** - PDF content generation (images, text formatting)
@@ -107,16 +109,34 @@ Run the built executable directly:
 
 - **src/pdfcontent/textfmt.zig** - Text formatting and PDF text content generation. Provides `addTextToPage()` and `addJsonToPage()` for adding text content to PDF pages.
 
-- **src/cmd/shared.zig** - Shared utilities for command implementations to reduce code duplication:
+- **src/pdfzig/shared.zig** - Library shared utilities (error-returning, no process.exit, no stdout/stderr):
+  - `openDocument()` - Open PDF with optional password
+  - `loadPage()` - Load page from document (1-based)
+  - `createDirectory()` - Create output directory
+  - `generatePageContent()` - Finalize page transformations
+  - `extensionLower()` - Get lowercase file extension using stack buffer
+  - `hasXmlExtension()` - Check if filename has XML-related extension (allocation-free)
+  - `addFileContentToPage()` - Add image/text/JSON content to page based on file extension
+
+- **src/pdfzig/rotate.zig** - `rotatePages()` - Rotate pages in a PDF document
+- **src/pdfzig/mirror.zig** - `mirrorPages()` - Mirror pages horizontally or vertically
+- **src/pdfzig/delete.zig** - `deletePages()` - Delete pages from a PDF document
+- **src/pdfzig/info.zig** - `getInfo(allocator, *Document)` - Get PDF metadata from an open document, returns `MetaData`
+- **src/pdfzig/extract_text.zig** - `extractText()` - Extract text content from PDF pages
+- **src/pdfzig/render.zig** - `renderPageToBitmap()` - Render a page to a BGRA bitmap at given DPI
+- **src/pdfzig/attach.zig** - `attachFile(allocator, *Document, name, content)` - Attach content bytes to PDF document
+
+- **src/cli/shared.zig** - CLI shared utilities (process.exit, stdout/stderr). Re-exports library shared functions and owns CLI-only utilities:
+  - `TempFileContext` / `setupTempFile()` / `completeTempFile()` - Temp file management for in-place editing
   - `exitWithError()` / `exitWithErrorMsg()` - Print error and exit with code 1
   - `requireInputPath()` - Validate input path or exit with error
-  - `openDocumentOrExit()` - Open PDF with optional password, exit on error
-  - `loadPageOrExit()` - Load page from document, exit on error
-  - `parsePageRangesOrExit()` / `parsePageListOrExit()` - Parse page ranges with error handling
-  - `createOutputDirectory()` - Create output directory or exit on error
+  - `openDocumentOrExit()` - Open PDF or exit on error
+  - `loadPageOrExit()` - Load page or exit on error
+  - `setupTempFileForInPlaceEdit()` / `completeTempFileEdit()` - Temp file with exit on error
+  - `generatePageContentOrExit()` / `generatePageContentWithNumOrExit()` - Generate content or exit
   - `reportSaveSuccess()` - Report save success if output differs from input
-  - `setupTempFileForInPlaceEdit()` / `completeTempFileEdit()` - Handle temp file creation and rename for in-place editing
-  - `generatePageContentOrExit()` / `generatePageContentWithNumOrExit()` - Generate page content or exit on error
+
+- **src/cli/*.zig** - CLI command implementations (one per command: rotate, mirror, delete, info, extract_text, render, extract_images, extract_attachments, visual_diff, add, create, attach, detach, download_pdfium). Each has a `run()` function with arg parsing and user-facing output.
 
 ### Dependencies
 
@@ -136,8 +156,8 @@ Run the built executable directly:
 
 ### Integration Tests
 
-- **src/cmd/info_test.zig** - Integration tests using real PDFs from [py-pdf/sample-files](https://github.com/py-pdf/sample-files)
-- **src/cmd/extract_attachments_test.zig** - Tests using ZUGFeRD invoice PDFs from [ZUGFeRD/corpus](https://github.com/ZUGFeRD/corpus)
+- **src/pdfzig/info_test.zig** - Integration tests using real PDFs from [py-pdf/sample-files](https://github.com/py-pdf/sample-files)
+- **src/pdfzig/extract_attachments_test.zig** - Tests using ZUGFeRD invoice PDFs from [ZUGFeRD/corpus](https://github.com/ZUGFeRD/corpus)
 - Tests auto-download PDFs to `test-cache/` directory (gitignored) on first run
 - All HTTP downloads use native Zig (no curl dependency)
 
