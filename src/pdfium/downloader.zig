@@ -154,7 +154,6 @@ fn downloadAndExtractForTarget(
 
     // Try to fetch the expected hash from GitHub API
     const expected_hash = fetchExpectedHash(allocator, asset_name, version);
-    if (expected_hash) |_| {}
 
     // Download the archive with progress
     const archive_data = try httpGetWithProgress(allocator, url, &.{}, progress_cb);
@@ -410,108 +409,16 @@ fn hashToHex(hash: [32]u8) [64]u8 {
 
 /// Download and extract PDFium using native Zig HTTP and tar
 fn downloadAndExtract(allocator: Allocator, url: []const u8, version: ?u32, output_dir: []const u8, progress_cb: ?ProgressCallback) !u32 {
-    const asset_name = getPdfiumAssetName() orelse return DownloadError.UnsupportedPlatform;
-
-    // Try to fetch the expected hash from GitHub API
-    const expected_hash = fetchExpectedHash(allocator, asset_name, version);
-    if (expected_hash) |_| {}
-
-    // Download the archive with progress
-    const archive_data = try httpGetWithProgress(allocator, url, &.{}, progress_cb);
-    defer allocator.free(archive_data);
-
-    if (archive_data.len < 1000) {
-        return DownloadError.DownloadFailed;
-    }
-
-    // Verify hash if we have an expected hash
-    if (expected_hash) |exp_hash| {
-        const actual_hash = calculateHash(archive_data);
-        const actual_hex = hashToHex(actual_hash);
-
-        if (!std.mem.eql(u8, &actual_hex, &exp_hash)) {
-            std.debug.print("Expected: {s}\n", .{exp_hash});
-            std.debug.print("Actual:   {s}\n", .{actual_hex});
-            return DownloadError.HashMismatch;
-        }
-    }
-
-    // Create a temporary directory for extraction
-    const tmp_dir = try std.fs.path.join(allocator, &.{ output_dir, ".pdfium_tmp" });
-    defer allocator.free(tmp_dir);
-
-    // Clean up any existing temp directory
-    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-
-    // Create temp directory
-    try std.fs.makeDirAbsolute(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-
-    // Decompress gzip and extract tar
-    var input_reader: std.Io.Reader = .fixed(archive_data);
-    var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
-    var decompress = std.compress.flate.Decompress.init(&input_reader, .gzip, &decompress_buffer);
-
-    var tmp_dir_handle = try std.fs.openDirAbsolute(tmp_dir, .{});
-    defer tmp_dir_handle.close();
-
-    std.tar.pipeToFileSystem(tmp_dir_handle, &decompress.reader, .{
-        .strip_components = 0,
-    }) catch |err| {
-        std.debug.print("Tar extraction failed: {}\n", .{err});
-        return DownloadError.ExtractionFailed;
-    };
-
-    // Get the version from VERSION file if not specified
-    const actual_version = version orelse blk: {
-        const version_file_path = try std.fs.path.join(allocator, &.{ tmp_dir, "VERSION" });
-        defer allocator.free(version_file_path);
-
-        // Read VERSION file using absolute path
-        const version_file = std.fs.openFileAbsolute(version_file_path, .{}) catch {
-            std.debug.print("Warning: Could not open VERSION file at {s}\n", .{version_file_path});
-            break :blk @as(u32, 0);
-        };
-        defer version_file.close();
-
-        var version_buf: [256]u8 = undefined;
-        const bytes_read = version_file.readAll(&version_buf) catch {
-            std.debug.print("Warning: Could not read VERSION file\n", .{});
-            break :blk @as(u32, 0);
-        };
-
-        // VERSION file contains KEY=VALUE pairs, we want BUILD=
-        const content = version_buf[0..bytes_read];
-        var line_it = std.mem.splitScalar(u8, content, '\n');
-        while (line_it.next()) |line| {
-            if (std.mem.startsWith(u8, line, "BUILD=")) {
-                const build_str = std.mem.trim(u8, line["BUILD=".len..], &std.ascii.whitespace);
-                break :blk std.fmt.parseInt(u32, build_str, 10) catch 0;
-            }
-        }
-        break :blk @as(u32, 0);
-    };
-
-    // Find the library in lib/ subdirectory
-    const src_lib_name = getSourceLibName();
-    const lib_src_path = try std.fs.path.join(allocator, &.{ tmp_dir, "lib", src_lib_name });
-    defer allocator.free(lib_src_path);
-
-    // Build destination filename with version
-    const dest_filename = try loader.buildLibraryFilename(allocator, actual_version);
-    defer allocator.free(dest_filename);
-
-    const dest_path = try std.fs.path.join(allocator, &.{ output_dir, dest_filename });
-    defer allocator.free(dest_path);
-
-    // Copy the library file
-    std.fs.copyFileAbsolute(lib_src_path, dest_path, .{}) catch |err| {
-        std.debug.print("Failed to copy library from {s} to {s}: {}\n", .{ lib_src_path, dest_path, err });
-        return DownloadError.ExtractionFailed;
-    };
+    const actual_version = try downloadAndExtractForTarget(allocator, url, version, output_dir, builtin.cpu.arch, builtin.os.tag, progress_cb);
 
     // On macOS, fix the library's install name
     if (builtin.os.tag == .macos) {
+        const dest_filename = try loader.buildLibraryFilename(allocator, actual_version);
+        defer allocator.free(dest_filename);
+
+        const dest_path = try std.fs.path.join(allocator, &.{ output_dir, dest_filename });
+        defer allocator.free(dest_path);
+
         const rpath_name = try std.fmt.allocPrint(allocator, "@rpath/{s}", .{dest_filename});
         defer allocator.free(rpath_name);
 
