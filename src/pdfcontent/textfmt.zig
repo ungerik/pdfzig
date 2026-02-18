@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const cli_parsing = @import("../cli_parsing.zig");
 
 // ============================================================================
 // UTF-8 to UTF-16 Conversion
@@ -58,46 +57,73 @@ pub const TextBlock = struct {
     color: struct { r: u8, g: u8, b: u8, a: u8 },
 };
 
-/// Extract text from a PDF document as JSON with formatting information
+/// Extract text from a PDF document as JSON with formatting information.
+/// first_page and last_page are 1-based, inclusive.
 pub fn extractTextAsJson(
     allocator: std.mem.Allocator,
     doc: *pdfium.Document,
-    page_count: u32,
-    page_ranges: ?[]cli_parsing.PageRange,
     output: *std.Io.Writer,
+    first_page: usize,
+    last_page: usize,
 ) !void {
     try output.writeAll("{\"pages\":[");
 
-    var first_page = true;
-    for (1..page_count + 1) |i| {
-        const page_num: u32 = @intCast(i);
-
-        if (page_ranges) |ranges| {
-            if (!cli_parsing.isPageInRanges(page_num, ranges)) continue;
-        }
-
+    var first = true;
+    var page_num = first_page;
+    while (page_num <= last_page) : (page_num += 1) {
         var page = doc.loadPage(page_num - 1) catch continue;
         defer page.close();
 
         var text_page = page.loadTextPage() orelse continue;
         defer text_page.close();
 
-        if (!first_page) try output.writeAll(",");
-        first_page = false;
+        if (!first) try output.writeAll(",");
+        first = false;
 
-        try output.print("{{\"page\":{d},\"width\":{d:.2},\"height\":{d:.2},\"blocks\":[", .{
-            page_num,
-            page.getWidth(),
-            page.getHeight(),
-        });
-
-        // Extract text blocks
-        try extractPageBlocks(allocator, &text_page, output);
-
-        try output.writeAll("]}");
+        try writePageJson(allocator, &page, &text_page, page_num, output);
     }
 
     try output.writeAll("]}\n");
+}
+
+/// Write a single page's JSON data (page number, dimensions, text blocks).
+/// Can be used by CLI to build JSON output for non-contiguous page ranges.
+pub fn writePageJson(
+    allocator: std.mem.Allocator,
+    page: *pdfium.Page,
+    text_page: *pdfium.TextPage,
+    page_num: usize,
+    output: *std.Io.Writer,
+) !void {
+    try output.print("{{\"page\":{d},\"width\":{d:.2},\"height\":{d:.2},\"blocks\":[", .{
+        page_num,
+        page.getWidth(),
+        page.getHeight(),
+    });
+
+    try extractPageBlocks(allocator, text_page, output);
+
+    try output.writeAll("]}");
+}
+
+/// Write a JSON-escaped string value (without surrounding quotes) to the output
+pub fn writeJsonEscaped(output: *std.Io.Writer, str: []const u8) !void {
+    for (str) |c| {
+        switch (c) {
+            '"' => try output.writeAll("\\\""),
+            '\\' => try output.writeAll("\\\\"),
+            '\n' => try output.writeAll("\\n"),
+            '\r' => try output.writeAll("\\r"),
+            '\t' => try output.writeAll("\\t"),
+            else => {
+                if (c < 32) {
+                    try output.print("\\u{x:0>4}", .{c});
+                } else {
+                    try output.writeByte(c);
+                }
+            },
+        }
+    }
 }
 
 fn extractPageBlocks(
@@ -108,10 +134,20 @@ fn extractPageBlocks(
     const char_count = text_page.getCharCount();
     if (char_count == 0) return;
 
-    // Arena allocator handles all cleanup
     var blocks = std.array_list.Managed(TextBlock).init(allocator);
+    defer {
+        for (blocks.items) |*block| {
+            block.text.deinit();
+            if (block.font_name) |name| allocator.free(name);
+        }
+        blocks.deinit();
+    }
 
     var current_block: ?TextBlock = null;
+    defer if (current_block) |*block| {
+        block.text.deinit();
+        if (block.font_name) |name| allocator.free(name);
+    };
 
     var prev_font_size: f64 = 0;
     var prev_font_weight: i32 = 0;
@@ -123,8 +159,8 @@ fn extractPageBlocks(
         const index: u32 = @intCast(idx);
         const unicode = text_page.getCharUnicode(index);
 
-        // Skip control characters except space/newline
-        if (unicode < 32 and unicode != 32 and unicode != 10 and unicode != 13) continue;
+        // Skip control characters except newline/carriage return
+        if (unicode < 32 and unicode != 10 and unicode != 13) continue;
 
         // Get character properties
         const box = text_page.getCharBox(index) orelse continue;
@@ -132,11 +168,15 @@ fn extractPageBlocks(
         const font_weight = text_page.getCharFontWeight(index);
         const color = text_page.getCharFillColor(index) orelse pdfium.TextPage.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
 
+        // Get font info once per character (used for italic check and font name on block boundaries)
         var is_italic = false;
+        var char_font_info: ?pdfium.TextPage.FontInfo = null;
         if (text_page.getCharFontInfo(allocator, index)) |info| {
             is_italic = info.flags.isItalic();
-            // Arena allocator handles cleanup
+            char_font_info = info;
         }
+        // Free font name at end of iteration unless transferred to a new block
+        defer if (char_font_info) |info| allocator.free(info.name);
 
         // Check if we need to start a new block
         const y_diff = @abs(box.top - prev_y);
@@ -157,10 +197,12 @@ fn extractPageBlocks(
                 current_block = null;
             }
 
-            // Get font name for this block
+            // Use font name from the already-fetched info
             var block_font_name: ?[]u8 = null;
-            if (text_page.getCharFontInfo(allocator, index)) |info| {
+            if (char_font_info) |*info| {
                 block_font_name = info.name;
+                // Prevent deferred free from freeing the name we're keeping
+                char_font_info = null;
             }
 
             const new_block = TextBlock{
@@ -199,6 +241,7 @@ fn extractPageBlocks(
     // Save last block
     if (current_block) |*block| {
         try blocks.append(block.*);
+        current_block = null;
     }
 
     // Output blocks as JSON
@@ -206,23 +249,7 @@ fn extractPageBlocks(
         if (idx > 0) try output.writeAll(",");
 
         try output.writeAll("{\"text\":\"");
-        // Escape JSON string
-        for (block.text.items) |c| {
-            switch (c) {
-                '"' => try output.writeAll("\\\""),
-                '\\' => try output.writeAll("\\\\"),
-                '\n' => try output.writeAll("\\n"),
-                '\r' => try output.writeAll("\\r"),
-                '\t' => try output.writeAll("\\t"),
-                else => {
-                    if (c < 32) {
-                        try output.print("\\u{x:0>4}", .{c});
-                    } else {
-                        try output.writeByte(c);
-                    }
-                },
-            }
-        }
+        try writeJsonEscaped(output, block.text.items);
         try output.writeAll("\",");
 
         try output.print("\"bbox\":{{\"left\":{d:.2},\"top\":{d:.2},\"right\":{d:.2},\"bottom\":{d:.2}}},", .{
@@ -234,7 +261,7 @@ fn extractPageBlocks(
 
         if (block.font_name) |name| {
             try output.writeAll("\"font\":\"");
-            try output.writeAll(name);
+            try writeJsonEscaped(output, name);
             try output.writeAll("\",");
         } else {
             try output.writeAll("\"font\":null,");
@@ -401,34 +428,38 @@ pub fn parseHexColor(color_str: []const u8) struct { r: u8, g: u8, b: u8, a: u8 
     return .{ .r = r, .g = g, .b = b, .a = a };
 }
 
+pub const AddContentError = error{
+    FileOpenFailed,
+    FileReadFailed,
+    JsonParseFailed,
+    InvalidJsonStructure,
+    TextObjectCreationFailed,
+    OutOfMemory,
+};
+
 /// Add formatted text from a JSON file to a PDF page
 pub fn addJsonToPage(
     allocator: std.mem.Allocator,
     doc: *pdfium.Document,
     page: *pdfium.Page,
     json_path: []const u8,
-    stderr: *std.Io.Writer,
-) !void {
+) AddContentError!void {
     // Read JSON file
     const file = std.fs.cwd().openFile(json_path, .{}) catch {
-        try stderr.print("Error opening JSON file: {s}\n", .{json_path});
-        try stderr.flush();
-        std.process.exit(1);
+        return error.FileOpenFailed;
     };
     defer file.close();
 
     const json_text = file.readToEndAlloc(allocator, 50 * 1024 * 1024) catch {
-        try stderr.writeAll("Error reading JSON file\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.FileReadFailed;
     };
+    defer allocator.free(json_text);
 
     // Parse JSON
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, json_text, .{}) catch {
-        try stderr.writeAll("Error parsing JSON\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.JsonParseFailed;
     };
+    defer parsed.deinit();
 
     const root = parsed.value;
 
@@ -441,9 +472,7 @@ pub fn addJsonToPage(
         null;
 
     if (pages == null) {
-        try stderr.writeAll("Error: JSON must have 'pages' array or 'blocks' array\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.InvalidJsonStructure;
     }
 
     // Handle different JSON structures
@@ -453,11 +482,11 @@ pub fn addJsonToPage(
                 // Check if this is a page object with blocks
                 if (item.object.get("blocks")) |blocks| {
                     if (blocks == .array) {
-                        try renderBlocks(allocator, doc, page, blocks.array.items, stderr);
+                        try renderBlocks(allocator, doc, page, blocks.array.items);
                     }
                 } else {
                     // This is a block object directly
-                    try renderBlock(allocator, doc, page, item, stderr);
+                    try renderBlock(allocator, doc, page, item);
                 }
             }
         }
@@ -469,10 +498,9 @@ fn renderBlocks(
     doc: *pdfium.Document,
     page: *pdfium.Page,
     blocks: []const std.json.Value,
-    stderr: *std.Io.Writer,
-) !void {
+) AddContentError!void {
     for (blocks) |block| {
-        try renderBlock(allocator, doc, page, block, stderr);
+        try renderBlock(allocator, doc, page, block);
     }
 }
 
@@ -481,8 +509,7 @@ fn renderBlock(
     doc: *pdfium.Document,
     page: *pdfium.Page,
     block: std.json.Value,
-    stderr: *std.Io.Writer,
-) !void {
+) AddContentError!void {
     if (block != .object) return;
 
     const obj = block.object;
@@ -546,8 +573,7 @@ fn renderBlock(
 
     // Create text object
     var text_obj = doc.createTextObject(std_font.name(), font_size) catch {
-        try stderr.writeAll("Error creating text object\n");
-        return;
+        return error.TextObjectCreationFailed;
     };
 
     // Convert UTF-8 to UTF-16LE for PDFium
@@ -727,11 +753,6 @@ test "roundtrip: create PDF from JSON and extract text" {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, input_json, .{});
     defer parsed.deinit();
 
-    // Use stderr for any error messages
-    var stderr_buf: [4096]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
-    const stderr = &stderr_writer.interface;
-
     // Get pages array
     const pages = parsed.value.object.get("pages");
     if (pages != null and pages.? == .array) {
@@ -739,7 +760,7 @@ test "roundtrip: create PDF from JSON and extract text" {
             if (item == .object) {
                 if (item.object.get("blocks")) |blocks| {
                     if (blocks == .array) {
-                        try renderBlocks(allocator, &doc, &page, blocks.array.items, stderr);
+                        try renderBlocks(allocator, &doc, &page, blocks.array.items);
                     }
                 }
             }
@@ -764,7 +785,7 @@ test "roundtrip: create PDF from JSON and extract text" {
     defer doc2.close();
 
     // Verify page count
-    try std.testing.expectEqual(@as(u32, 1), doc2.getPageCount());
+    try std.testing.expectEqual(@as(usize, 1), doc2.getPageCount());
 
     // Load the page
     var page2 = try doc2.loadPage(0);
@@ -795,27 +816,23 @@ pub fn addTextToPage(
     text_path: []const u8,
     page_width: f64,
     page_height: f64,
-    stderr: *std.Io.Writer,
-) !void {
+) AddContentError!void {
     // Read text file
     const file = std.fs.cwd().openFile(text_path, .{}) catch {
-        try stderr.print("Error opening text file: {s}\n", .{text_path});
-        try stderr.flush();
-        std.process.exit(1);
+        return error.FileOpenFailed;
     };
     defer file.close();
 
     const text = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch {
-        try stderr.writeAll("Error reading text file\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.FileReadFailed;
     };
     defer allocator.free(text);
 
     const font_size: f32 = 12.0;
     const line_height: f64 = font_size * 1.2;
     const margin: f64 = 72.0; // 1 inch margin
-    const max_width = page_width - 2 * margin;
+    _ = page_width; // Will be used for text wrapping in future
+    // const max_width = page_width - 2 * margin;
 
     var y_pos = page_height - margin - font_size;
 
@@ -831,13 +848,13 @@ pub fn addTextToPage(
 
         // Create text object
         var text_obj = doc.createTextObject("Courier", font_size) catch {
-            try stderr.writeAll("Error creating text object\n");
-            try stderr.flush();
-            std.process.exit(1);
+            return error.TextObjectCreationFailed;
         };
 
         // Convert UTF-8 to UTF-16LE for PDFium
-        var utf16_buf = encodeUtf8ToUtf16(allocator, line) catch continue;
+        var utf16_buf = encodeUtf8ToUtf16(allocator, line) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+        };
         defer utf16_buf.deinit();
 
         if (!text_obj.setText(utf16_buf.items)) {
@@ -852,6 +869,4 @@ pub fn addTextToPage(
 
         y_pos -= line_height;
     }
-
-    _ = max_width; // Will be used for text wrapping in future
 }

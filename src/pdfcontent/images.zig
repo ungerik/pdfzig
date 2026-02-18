@@ -38,6 +38,7 @@ pub const WriteError = error{
 
 /// Write a PDFium bitmap to a file
 pub fn writeBitmap(
+    allocator: std.mem.Allocator,
     bitmap: pdfium.Bitmap,
     output_path: []const u8,
     options: WriteOptions,
@@ -48,7 +49,6 @@ pub fn writeBitmap(
     switch (options.format) {
         .png => {
             // Convert BGRA to RGBA for zigimg (PNG supports alpha)
-            const allocator = std.heap.page_allocator;
             const pixels = try convertBgraToRgba(allocator, data, bitmap.width, bitmap.height, bitmap.stride);
             defer allocator.free(pixels);
 
@@ -64,21 +64,21 @@ pub fn writeBitmap(
 
             // Write buffer for encoding
             var write_buffer: [4096]u8 = undefined;
-            image.writeToFilePath(std.heap.page_allocator, output_path, &write_buffer, .{
+            image.writeToFilePath(allocator, output_path, &write_buffer, .{
                 .png = .{ .filter_choice = .heuristic },
             }) catch return WriteError.WriteError;
         },
         .jpeg => {
             // Convert BGRA to RGB for JPEG (no alpha channel support)
-            const rgb_data = try convertBgraToRgb(data, bitmap.width, bitmap.height, bitmap.stride);
-            defer std.heap.page_allocator.free(rgb_data);
+            const rgb_data = try convertBgraToRgb(allocator, data, bitmap.width, bitmap.height, bitmap.stride);
+            defer allocator.free(rgb_data);
 
             // Create null-terminated path for zstbi
-            const path_z = std.heap.page_allocator.dupeZ(u8, output_path) catch return WriteError.OutOfMemory;
-            defer std.heap.page_allocator.free(path_z);
+            const path_z = allocator.dupeZ(u8, output_path) catch return WriteError.OutOfMemory;
+            defer allocator.free(path_z);
 
             // Initialize zstbi
-            zstbi.init(std.heap.page_allocator);
+            zstbi.init(allocator);
             defer zstbi.deinit();
 
             // Create zstbi Image struct
@@ -114,11 +114,11 @@ pub fn convertBgraToRgba(
         const src_row_start = y * stride;
         for (0..width) |x| {
             const src_offset = src_row_start + x * 4;
-            // BGRA -> RGBA
-            rgba[dst_offset + 0] = bgra_data[src_offset + 2]; // R <- B
-            rgba[dst_offset + 1] = bgra_data[src_offset + 1]; // G <- G
-            rgba[dst_offset + 2] = bgra_data[src_offset + 0]; // B <- R
-            rgba[dst_offset + 3] = bgra_data[src_offset + 3]; // A <- A
+            // Swap B and R channels: BGRA[B,G,R,A] -> RGBA[R,G,B,A]
+            rgba[dst_offset + 0] = bgra_data[src_offset + 2]; // R
+            rgba[dst_offset + 1] = bgra_data[src_offset + 1]; // G
+            rgba[dst_offset + 2] = bgra_data[src_offset + 0]; // B
+            rgba[dst_offset + 3] = bgra_data[src_offset + 3]; // A
             dst_offset += 4;
         }
     }
@@ -128,23 +128,24 @@ pub fn convertBgraToRgba(
 
 /// Convert BGRA pixel data to RGB (for JPEG without alpha)
 fn convertBgraToRgb(
+    allocator: std.mem.Allocator,
     bgra_data: []const u8,
     width: u32,
     height: u32,
     stride: u32,
 ) ![]u8 {
-    const rgb = try std.heap.page_allocator.alloc(u8, width * height * 3);
-    errdefer std.heap.page_allocator.free(rgb);
+    const rgb = try allocator.alloc(u8, width * height * 3);
+    errdefer allocator.free(rgb);
 
     var dst_offset: usize = 0;
     for (0..height) |y| {
         const src_row_start = y * stride;
         for (0..width) |x| {
             const src_offset = src_row_start + x * 4;
-            // BGRA -> RGB (discard alpha)
-            rgb[dst_offset + 0] = bgra_data[src_offset + 2]; // R <- B
-            rgb[dst_offset + 1] = bgra_data[src_offset + 1]; // G <- G
-            rgb[dst_offset + 2] = bgra_data[src_offset + 0]; // B <- R
+            // Swap B and R channels, discard A: BGRA[B,G,R,A] -> RGB[R,G,B]
+            rgb[dst_offset + 0] = bgra_data[src_offset + 2]; // R
+            rgb[dst_offset + 1] = bgra_data[src_offset + 1]; // G
+            rgb[dst_offset + 2] = bgra_data[src_offset + 0]; // B
             dst_offset += 3;
         }
     }
@@ -166,6 +167,16 @@ test "Format.extension" {
     try std.testing.expectEqualStrings("jpg", Format.jpeg.extension());
 }
 
+pub const AddImageError = error{
+    ImageLoadFailed,
+    BitmapCreationFailed,
+    BitmapBufferNull,
+    UnsupportedImageFormat,
+    ImageObjectCreationFailed,
+    SetBitmapFailed,
+    SetMatrixFailed,
+};
+
 pub fn addImageToPage(
     allocator: std.mem.Allocator,
     doc: *pdfium.Document,
@@ -173,14 +184,11 @@ pub fn addImageToPage(
     image_path: []const u8,
     page_width: f64,
     page_height: f64,
-    stderr: *std.Io.Writer,
-) !void {
+) AddImageError!void {
     // Load image using zigimg
     var read_buffer: [1024 * 1024]u8 = undefined;
     var img = zigimg.Image.fromFilePath(allocator, image_path, &read_buffer) catch {
-        try stderr.print("Error loading image: {s}\n", .{image_path});
-        try stderr.flush();
-        std.process.exit(1);
+        return error.ImageLoadFailed;
     };
     defer img.deinit(allocator);
 
@@ -201,17 +209,13 @@ pub fn addImageToPage(
 
     // Create bitmap in BGRA format for PDFium
     var bitmap = pdfium.Bitmap.create(@intFromFloat(img_width), @intFromFloat(img_height), .bgra) catch {
-        try stderr.writeAll("Error creating bitmap\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.BitmapCreationFailed;
     };
     defer bitmap.destroy();
 
     // Copy image data to bitmap (convert to BGRA)
     const buffer = bitmap.getBuffer() orelse {
-        try stderr.writeAll("Error getting bitmap buffer\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.BitmapBufferNull;
     };
 
     // Convert image pixels to BGRA
@@ -270,32 +274,22 @@ pub fn addImageToPage(
                 }
             }
         },
-        else => {
-            try stderr.print("Unsupported image format: {s}\n", .{@tagName(img.pixels)});
-            try stderr.flush();
-            std.process.exit(1);
-        },
+        else => return error.UnsupportedImageFormat,
     }
 
     // Create image object
     var img_obj = doc.createImageObject() catch {
-        try stderr.writeAll("Error creating image object\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.ImageObjectCreationFailed;
     };
 
     // Set the bitmap on the image object
     if (!img_obj.setBitmap(bitmap)) {
-        try stderr.writeAll("Error setting bitmap on image object\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.SetBitmapFailed;
     }
 
     // Position and scale the image
     if (!img_obj.setImageMatrix(scaled_width, scaled_height, x_offset, y_offset)) {
-        try stderr.writeAll("Error positioning image\n");
-        try stderr.flush();
-        std.process.exit(1);
+        return error.SetMatrixFailed;
     }
 
     // Insert image into page

@@ -2,10 +2,9 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const cli_parsing = @import("../cli_parsing.zig");
+const cli_parsing = @import("arg_parsing.zig");
 const shared = @import("shared.zig");
 const images = @import("../pdfcontent/images.zig");
-const main = @import("../main.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -18,12 +17,20 @@ const Args = struct {
     show_help: bool = false,
 };
 
+/// Run the extract_images command: extract embedded images from PDF pages.
+/// Saves each image object as a separate file in PNG or JPEG format.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    arg_it: *cli_parsing.SliceArgIterator,
 ) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
+
     var args = Args{};
 
     while (arg_it.next()) |arg| {
@@ -38,30 +45,20 @@ pub fn run(
                 args.password = arg_it.next();
             } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--format")) {
                 const fmt_str = arg_it.next() orelse {
-                    try stderr.writeAll("Error: --format requires an argument\n");
-                    try stderr.flush();
-                    std.process.exit(1);
+                    shared.exitWithErrorMsg(stderr, "Error: --format requires an argument\n");
                 };
                 args.format = images.Format.fromString(fmt_str) orelse {
-                    try stderr.print("Error: Invalid format '{s}'\n", .{fmt_str});
-                    try stderr.flush();
-                    std.process.exit(1);
+                    shared.exitWithError(stderr, "Error: Invalid format '{s}'\n", .{fmt_str});
                 };
             } else if (std.mem.eql(u8, arg, "-Q") or std.mem.eql(u8, arg, "--quality")) {
                 const q_str = arg_it.next() orelse {
-                    try stderr.writeAll("Error: --quality requires an argument\n");
-                    try stderr.flush();
-                    std.process.exit(1);
+                    shared.exitWithErrorMsg(stderr, "Error: --quality requires an argument\n");
                 };
                 args.quality = std.fmt.parseInt(u8, q_str, 10) catch {
-                    try stderr.writeAll("Error: Invalid quality value\n");
-                    try stderr.flush();
-                    std.process.exit(1);
+                    shared.exitWithErrorMsg(stderr, "Error: Invalid quality value\n");
                 };
             } else {
-                try stderr.print("Unknown option: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else {
             if (args.input_path == null) {
@@ -77,18 +74,13 @@ pub fn run(
         return;
     }
 
-    const input_path = args.input_path orelse {
-        try stderr.writeAll("Error: No input PDF file specified\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
-    };
+    const input_path = shared.requireInputPath(args.input_path, stderr);
 
     // Create output directory
     shared.createOutputDirectory(args.output_dir, stderr);
 
     // Open document
-    var doc = main.openDocument(allocator, input_path, args.password, stderr) orelse std.process.exit(1);
+    var doc = shared.openDocumentOrExit(allocator, input_path, args.password, stderr);
     defer doc.close();
 
     const page_count = doc.getPageCount();
@@ -104,9 +96,7 @@ pub fn run(
     var image_count: u32 = 0;
 
     // Extract images from each page
-    for (1..page_count + 1) |i| {
-        const page_num: u32 = @intCast(i);
-
+    for (1..page_count + 1) |page_num| {
         if (page_ranges) |ranges| {
             if (!cli_parsing.isPageInRanges(page_num, ranges)) continue;
         }
@@ -131,7 +121,7 @@ pub fn run(
             const output_path = std.fs.path.join(allocator, &.{ args.output_dir, filename }) catch continue;
             defer allocator.free(output_path);
 
-            images.writeBitmap(bitmap, output_path, .{
+            images.writeBitmap(allocator, bitmap, output_path, .{
                 .format = args.format,
                 .jpeg_quality = args.quality,
             }) catch {
@@ -154,7 +144,7 @@ pub fn run(
     }
 }
 
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig extract_images [options] <input.pdf> [output_dir]
         \\

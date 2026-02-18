@@ -1,9 +1,7 @@
 //! Extract Attachments command - Extract embedded attachments from PDF
 
 const std = @import("std");
-const pdfium = @import("../pdfium/pdfium.zig");
-const main = @import("../main.zig");
-const cli_parsing = @import("../cli_parsing.zig");
+const cli_parsing = @import("arg_parsing.zig");
 const shared = @import("shared.zig");
 
 const Args = struct {
@@ -16,12 +14,20 @@ const Args = struct {
     show_help: bool = false,
 };
 
+/// Run the extract_attachments command: extract embedded file attachments from a PDF.
+/// Supports glob pattern filtering and a list-only mode.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    arg_it: *cli_parsing.SliceArgIterator,
 ) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
+
     var args = Args{};
 
     while (arg_it.next()) |arg| {
@@ -35,9 +41,7 @@ pub fn run(
             } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
                 args.password = arg_it.next();
             } else {
-                try stderr.print("Unknown option: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else {
             if (args.input_path == null) {
@@ -65,12 +69,7 @@ pub fn run(
         return;
     }
 
-    const input_path = args.input_path orelse {
-        try stderr.writeAll("Error: No input PDF file specified\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
-    };
+    const input_path = shared.requireInputPath(args.input_path, stderr);
 
     // Create output directory if not list-only mode
     if (!args.list_only) {
@@ -78,7 +77,7 @@ pub fn run(
     }
 
     // Open document
-    var doc = main.openDocument(allocator, input_path, args.password, stderr) orelse std.process.exit(1);
+    var doc = shared.openDocumentOrExit(allocator, input_path, args.password, stderr);
     defer doc.close();
 
     const attachment_count = doc.getAttachmentCount();
@@ -149,7 +148,7 @@ pub fn run(
     }
 }
 
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig extract_attachments [options] <input.pdf> [pattern] [output_dir]
         \\

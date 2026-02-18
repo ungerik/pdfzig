@@ -1,10 +1,9 @@
-//! Mirror command - Mirror PDF pages horizontally or vertically
+//! CLI: Mirror command - Mirror PDF pages horizontally or vertically
 
 const std = @import("std");
-const pdfium = @import("../pdfium/pdfium.zig");
-const main = @import("../main.zig");
-const cli_parsing = @import("../cli_parsing.zig");
+const cli_parsing = @import("arg_parsing.zig");
 const shared = @import("shared.zig");
+const pdfzig_mirror = @import("../pdfzig/mirror.zig");
 
 const Args = struct {
     input_path: ?[]const u8 = null,
@@ -16,12 +15,21 @@ const Args = struct {
     show_help: bool = false,
 };
 
+/// Run the mirror command: mirror PDF pages horizontally or vertically.
+/// Defaults to horizontal (left-right) if neither --leftright nor --updown is specified.
+/// Modifies the input file in-place unless -o is specified.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    arg_it: *cli_parsing.SliceArgIterator,
 ) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
+
     var args = Args{};
 
     while (arg_it.next()) |arg| {
@@ -51,7 +59,7 @@ pub fn run(
         return;
     }
 
-    const input_path = shared.requireInputPath(args.input_path, stderr, stdout, printUsage);
+    const input_path = shared.requireInputPath(args.input_path, stderr);
 
     // Default to leftright if neither specified
     if (!args.updown and !args.leftright) {
@@ -67,37 +75,19 @@ pub fn run(
 
     const page_count = doc.getPageCount();
 
-    // Parse page range or use all pages
-    const pages_to_mirror = try cli_parsing.parsePageList(allocator, args.page_range, page_count, stderr);
-    defer allocator.free(pages_to_mirror);
-
-    // Mirror each specified page
-    for (pages_to_mirror) |page_num| {
-        var page = shared.loadPageOrExit(&doc, page_num, stderr);
-        defer page.close();
-
-        const page_width = page.getWidth();
-        const page_height = page.getHeight();
-
-        // Apply transformations to all objects on the page
-        const obj_count = page.getObjectCount();
-        var obj_idx: u32 = 0;
-        while (obj_idx < obj_count) : (obj_idx += 1) {
-            if (page.getObject(obj_idx)) |obj| {
-                // Apply left-right mirror first if requested
-                if (args.leftright) {
-                    // Mirror horizontally: scale X by -1, translate by page width
-                    obj.transform(-1, 0, 0, 1, page_width, 0);
-                }
-                // Apply up-down mirror second if requested
-                if (args.updown) {
-                    // Mirror vertically: scale Y by -1, translate by page height
-                    obj.transform(1, 0, 0, -1, 0, page_height);
-                }
-            }
+    // Mirror pages using library function
+    var mirrored_count: usize = 0;
+    if (shared.parsePageRangesOrExit(allocator, args.page_range, page_count, stderr)) |ranges| {
+        defer allocator.free(ranges);
+        for (ranges) |range| {
+            mirrored_count += pdfzig_mirror.mirrorPages(&doc, args.leftright, args.updown, range.start, range.end) catch |err| {
+                shared.exitWithError(stderr, "Error mirroring pages: {}\n", .{err});
+            };
         }
-
-        shared.generatePageContentWithNumOrExit(&page, page_num, stderr);
+    } else {
+        mirrored_count = pdfzig_mirror.mirrorPages(&doc, args.leftright, args.updown, 1, page_count) catch |err| {
+            shared.exitWithError(stderr, "Error mirroring pages: {}\n", .{err});
+        };
     }
 
     // Save the document
@@ -116,16 +106,16 @@ pub fn run(
     else
         "left-right";
 
-    if (pages_to_mirror.len == page_count) {
+    if (mirrored_count == page_count) {
         try stdout.print("Mirrored all {d} pages ({s})\n", .{ page_count, mirror_type });
     } else {
-        try stdout.print("Mirrored {d} page(s) ({s})\n", .{ pages_to_mirror.len, mirror_type });
+        try stdout.print("Mirrored {d} page(s) ({s})\n", .{ mirrored_count, mirror_type });
     }
 
     shared.reportSaveSuccess(stdout, temp_ctx.output_path, temp_ctx.input_path);
 }
 
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig mirror [options] <input.pdf>
         \\

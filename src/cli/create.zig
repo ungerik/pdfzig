@@ -2,11 +2,8 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const cli_parsing = @import("../cli_parsing.zig");
+const cli_parsing = @import("arg_parsing.zig");
 const shared = @import("shared.zig");
-const textfmt = @import("../pdfcontent/textfmt.zig");
-const images = @import("../pdfcontent/images.zig");
-const main = @import("../main.zig");
 
 const PageSize = cli_parsing.PageSize;
 
@@ -22,12 +19,20 @@ const SourceSpec = struct {
     page_range: ?[]const u8 = null, // For PDFs: "1-3,5" or null for all
 };
 
+/// Run the create command: create a new PDF from one or multiple source files.
+/// Sources can be PDFs (with optional page ranges), images, text files, or :blank pages.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    arg_it: *cli_parsing.SliceArgIterator,
 ) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
+
     var args = Args{
         .sources = std.array_list.Managed(SourceSpec).init(allocator),
     };
@@ -44,17 +49,13 @@ pub fn run(
             } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--size")) {
                 if (arg_it.next()) |size_str| {
                     args.page_size = PageSize.parse(size_str) orelse {
-                        try stderr.print("Invalid size: {s}\n", .{size_str});
-                        try stderr.flush();
-                        std.process.exit(1);
+                        shared.exitWithError(stderr, "Invalid size: {s}\n", .{size_str});
                     };
                 }
             } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--pages")) {
                 current_page_range = arg_it.next();
             } else {
-                try stderr.print("Unknown option: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else {
             // Source file
@@ -72,17 +73,11 @@ pub fn run(
     }
 
     if (args.sources.items.len == 0) {
-        try stderr.writeAll("Error: No source files specified\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
+        shared.exitWithErrorMsg(stderr, "Error: No source files specified\n");
     }
 
     const output_path = args.output_path orelse {
-        try stderr.writeAll("Error: Output file required (-o <file>)\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
+        shared.exitWithErrorMsg(stderr, "Error: Output file required (-o <file>)\n");
     };
 
     // Default page size
@@ -90,44 +85,32 @@ pub fn run(
 
     // Create new document
     var doc = pdfium.Document.createNew() catch |err| {
-        try stderr.print("Error creating document: {}\n", .{err});
-        try stderr.flush();
-        std.process.exit(1);
+        shared.exitWithError(stderr, "Error creating document: {}\n", .{err});
     };
     defer doc.close();
 
-    var pages_added: u32 = 0;
+    var pages_added: usize = 0;
 
     // Process each source
     for (args.sources.items) |source| {
         if (std.mem.eql(u8, source.path, cli_parsing.BLANK_PAGE)) {
             // Add blank page
             var page = doc.createPage(pages_added, default_size.width, default_size.height) catch |err| {
-                try stderr.print("Error creating blank page: {}\n", .{err});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Error creating blank page: {}\n", .{err});
             };
             shared.generatePageContentOrExit(&page, stderr);
             page.close();
             pages_added += 1;
             try stdout.writeAll("Added blank page\n");
         } else {
-            const ext = std.fs.path.extension(source.path);
-            const ext_lower = blk: {
-                var buf: [16]u8 = undefined;
-                const len = @min(ext.len, buf.len);
-                for (ext[0..len], 0..) |c, i| {
-                    buf[i] = std.ascii.toLower(c);
-                }
-                break :blk buf[0..len];
-            };
+            // Check if source is a PDF (case-insensitive extension check)
+            var ext_buf: [16]u8 = undefined;
+            const ext_lower = shared.extensionLower(source.path, &ext_buf);
 
             if (std.mem.eql(u8, ext_lower, ".pdf")) {
                 // Import pages from PDF
                 var src_doc = pdfium.Document.open(allocator, source.path) catch |err| {
-                    try stderr.print("Error opening PDF {s}: {}\n", .{ source.path, err });
-                    try stderr.flush();
-                    std.process.exit(1);
+                    shared.exitWithError(stderr, "Error opening PDF {s}: {}\n", .{ source.path, err });
                 };
                 defer src_doc.close();
 
@@ -135,80 +118,45 @@ pub fn run(
 
                 if (source.page_range) |range| {
                     // Import specific pages
+                    const count_before = doc.getPageCount();
                     if (!doc.importPagesRange(&src_doc, range, pages_added)) {
-                        try stderr.print("Error importing pages from {s}\n", .{source.path});
-                        try stderr.flush();
-                        std.process.exit(1);
+                        shared.exitWithError(stderr, "Error importing pages from {s}\n", .{source.path});
                     }
-                    // Count pages in range (approximate for reporting)
+                    const imported_count = doc.getPageCount() - count_before;
+                    pages_added += imported_count;
                     try stdout.print("Imported pages {s} from: {s}\n", .{ range, std.fs.path.basename(source.path) });
                 } else {
                     // Import all pages
                     if (!doc.importPagesRange(&src_doc, null, pages_added)) {
-                        try stderr.print("Error importing pages from {s}\n", .{source.path});
-                        try stderr.flush();
-                        std.process.exit(1);
+                        shared.exitWithError(stderr, "Error importing pages from {s}\n", .{source.path});
                     }
                     pages_added += src_page_count;
                     try stdout.print("Imported {d} pages from: {s}\n", .{ src_page_count, std.fs.path.basename(source.path) });
                 }
-            } else if (std.mem.eql(u8, ext_lower, ".json")) {
-                // Add page with formatted text from JSON
-                var page = doc.createPage(pages_added, default_size.width, default_size.height) catch |err| {
-                    try stderr.print("Error creating page: {}\n", .{err});
-                    try stderr.flush();
-                    std.process.exit(1);
-                };
-                defer page.close();
-
-                try textfmt.addJsonToPage(allocator, &doc, &page, source.path, stderr);
-
-                shared.generatePageContentOrExit(&page, stderr);
-                pages_added += 1;
-                try stdout.print("Added page with formatted text from: {s}\n", .{std.fs.path.basename(source.path)});
-            } else if (std.mem.eql(u8, ext_lower, ".txt") or std.mem.eql(u8, ext_lower, ".text")) {
-                // Add page with text content
-                var page = doc.createPage(pages_added, default_size.width, default_size.height) catch |err| {
-                    try stderr.print("Error creating page: {}\n", .{err});
-                    try stderr.flush();
-                    std.process.exit(1);
-                };
-                defer page.close();
-
-                try textfmt.addTextToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
-
-                shared.generatePageContentOrExit(&page, stderr);
-                pages_added += 1;
-                try stdout.print("Added page with text from: {s}\n", .{std.fs.path.basename(source.path)});
             } else {
-                // Try to add as image
+                // Add page with content (image, text, or JSON)
                 var page = doc.createPage(pages_added, default_size.width, default_size.height) catch |err| {
-                    try stderr.print("Error creating page: {}\n", .{err});
-                    try stderr.flush();
-                    std.process.exit(1);
+                    shared.exitWithError(stderr, "Error creating page: {}\n", .{err});
                 };
                 defer page.close();
 
-                try images.addImageToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
-
+                shared.addFileContentToPage(allocator, &doc, &page, source.path, default_size.width, default_size.height, stderr);
                 shared.generatePageContentOrExit(&page, stderr);
                 pages_added += 1;
-                try stdout.print("Added page with image from: {s}\n", .{std.fs.path.basename(source.path)});
+                try stdout.print("Added page from: {s}\n", .{std.fs.path.basename(source.path)});
             }
         }
     }
 
     // Save the document
     doc.saveWithVersion(output_path, null) catch |err| {
-        try stderr.print("Error saving PDF: {}\n", .{err});
-        try stderr.flush();
-        std.process.exit(1);
+        shared.exitWithError(stderr, "Error saving PDF: {}\n", .{err});
     };
 
     try stdout.print("Created: {s} ({d} pages)\n", .{ output_path, pages_added });
 }
 
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig create -o <output.pdf> [options] <sources...>
         \\

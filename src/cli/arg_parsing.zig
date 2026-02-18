@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const glob = @import("glob");
-const images = @import("pdfcontent/images.zig");
+const images = @import("../pdfcontent/images.zig");
 
 /// Available commands
 pub const Command = enum {
@@ -20,8 +20,6 @@ pub const Command = enum {
     attach,
     detach,
     download_pdfium,
-    help,
-    version_cmd,
 };
 
 /// Special constant for blank page in create command
@@ -118,18 +116,18 @@ pub fn matchGlobPatternCaseInsensitive(pattern: []const u8, name: []const u8) bo
 // ============================================================================
 
 pub const PageRange = struct {
-    start: u32,
-    end: u32, // inclusive
+    start: usize,
+    end: usize, // inclusive
 
-    pub fn contains(self: PageRange, page: u32) bool {
+    pub fn contains(self: PageRange, page: usize) bool {
         return page >= self.start and page <= self.end;
     }
 };
 
 /// Parse a page range string like "1-5,8,10-12" into a list of PageRanges
-pub fn parsePageRanges(allocator: std.mem.Allocator, range_str: []const u8, max_page: u32) ![]PageRange {
-    var ranges: std.ArrayListUnmanaged(PageRange) = .empty;
-    errdefer ranges.deinit(allocator);
+pub fn parsePageRanges(allocator: std.mem.Allocator, range_str: []const u8, max_page: usize) ![]PageRange {
+    var ranges = std.array_list.Managed(PageRange).init(allocator);
+    errdefer ranges.deinit();
 
     var it = std.mem.splitSequence(u8, range_str, ",");
     while (it.next()) |part| {
@@ -141,29 +139,29 @@ pub fn parsePageRanges(allocator: std.mem.Allocator, range_str: []const u8, max_
             const start_str = std.mem.trim(u8, trimmed[0..dash_pos], " ");
             const end_str = std.mem.trim(u8, trimmed[dash_pos + 1 ..], " ");
 
-            const start = std.fmt.parseInt(u32, start_str, 10) catch return error.InvalidPageRange;
-            const end = std.fmt.parseInt(u32, end_str, 10) catch return error.InvalidPageRange;
+            const start = std.fmt.parseInt(usize, start_str, 10) catch return error.InvalidPageRange;
+            const end = std.fmt.parseInt(usize, end_str, 10) catch return error.InvalidPageRange;
 
             if (start == 0 or end == 0 or start > end or end > max_page) {
                 return error.InvalidPageRange;
             }
 
-            try ranges.append(allocator, .{ .start = start, .end = end });
+            try ranges.append(.{ .start = start, .end = end });
         } else {
             // Single page like "8"
-            const page = std.fmt.parseInt(u32, trimmed, 10) catch return error.InvalidPageRange;
+            const page = std.fmt.parseInt(usize, trimmed, 10) catch return error.InvalidPageRange;
             if (page == 0 or page > max_page) {
                 return error.InvalidPageRange;
             }
-            try ranges.append(allocator, .{ .start = page, .end = page });
+            try ranges.append(.{ .start = page, .end = page });
         }
     }
 
-    return ranges.toOwnedSlice(allocator);
+    return try ranges.toOwnedSlice();
 }
 
 /// Check if a page number (1-based) is in any of the ranges
-pub fn isPageInRanges(page: u32, ranges: []const PageRange) bool {
+pub fn isPageInRanges(page: usize, ranges: []const PageRange) bool {
     for (ranges) |range| {
         if (range.contains(page)) return true;
     }
@@ -650,51 +648,4 @@ test "parsePageRanges errors" {
 
     // Invalid number
     try std.testing.expectError(error.InvalidPageRange, parsePageRanges(allocator, "abc", 20));
-}
-
-/// Expand a list of PageRanges into a flat list of page numbers.
-pub fn expandPageRanges(allocator: std.mem.Allocator, ranges: []const PageRange) std.mem.Allocator.Error![]u32 {
-    var pages = std.array_list.Managed(u32).init(allocator);
-    errdefer pages.deinit();
-
-    for (ranges) |range| {
-        var p = range.start;
-        while (p <= range.end) : (p += 1) {
-            try pages.append(p);
-        }
-    }
-
-    return try pages.toOwnedSlice();
-}
-
-/// Parse a page range string (e.g., "1-5,8,10-12") into a list of page numbers.
-/// If range_str is null, returns all pages from 1 to page_count.
-/// Prints error message on stderr and exits on invalid input.
-pub fn parsePageList(
-    allocator: std.mem.Allocator,
-    range_str: ?[]const u8,
-    page_count: u32,
-    stderr: *std.Io.Writer,
-) std.mem.Allocator.Error![]u32 {
-    if (range_str) |range| {
-        const ranges = parsePageRanges(allocator, range, page_count) catch {
-            stderr.print("Invalid page range: {s} (document has {d} pages)\n", .{ range, page_count }) catch {};
-            stderr.flush() catch {};
-            std.process.exit(1);
-        };
-        defer allocator.free(ranges);
-
-        return expandPageRanges(allocator, ranges);
-    } else {
-        // All pages
-        var pages = std.array_list.Managed(u32).init(allocator);
-        errdefer pages.deinit();
-
-        var p: u32 = 1;
-        while (p <= page_count) : (p += 1) {
-            try pages.append(p);
-        }
-
-        return try pages.toOwnedSlice();
-    }
 }

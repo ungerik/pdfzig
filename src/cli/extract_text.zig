@@ -1,11 +1,10 @@
-//! Extract Text command - Extract text content from PDF pages
+//! CLI: Extract Text command - Extract text content from PDF pages
 
 const std = @import("std");
-const pdfium = @import("../pdfium/pdfium.zig");
-const cli_parsing = @import("../cli_parsing.zig");
+const cli_parsing = @import("arg_parsing.zig");
 const shared = @import("shared.zig");
 const textfmt = @import("../pdfcontent/textfmt.zig");
-const main = @import("../main.zig");
+const lib_extract_text = @import("../pdfzig/extract_text.zig");
 
 pub const TextOutputFormat = enum {
     text,
@@ -28,12 +27,21 @@ const Args = struct {
     show_help: bool = false,
 };
 
+/// Run the extract_text command: extract text content from PDF pages.
+/// Supports plain text and JSON output formats.
+/// Text mode supports custom page separators with {{PAGE_NO}} placeholder.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    arg_it: *cli_parsing.SliceArgIterator,
 ) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
+
     var args = Args{};
 
     while (arg_it.next()) |arg| {
@@ -49,17 +57,13 @@ pub fn run(
             } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--format")) {
                 if (arg_it.next()) |fmt_str| {
                     args.format = TextOutputFormat.fromString(fmt_str) orelse {
-                        try stderr.print("Error: Unknown format '{s}'. Use 'text' or 'json'\n", .{fmt_str});
-                        try stderr.flush();
-                        std.process.exit(1);
+                        shared.exitWithError(stderr, "Error: Unknown format '{s}'. Use 'text' or 'json'\n", .{fmt_str});
                     };
                 }
             } else if (std.mem.eql(u8, arg, "--page-separator") or std.mem.eql(u8, arg, "--page_separator")) {
                 args.page_separator = arg_it.next() orelse "";
             } else {
-                try stderr.print("Unknown option: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else {
             args.input_path = arg;
@@ -71,15 +75,10 @@ pub fn run(
         return;
     }
 
-    const input_path = args.input_path orelse {
-        try stderr.writeAll("Error: No input PDF file specified\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
-    };
+    const input_path = shared.requireInputPath(args.input_path, stderr);
 
     // Open document
-    var doc = main.openDocument(allocator, input_path, args.password, stderr) orelse std.process.exit(1);
+    var doc = shared.openDocumentOrExit(allocator, input_path, args.password, stderr);
     defer doc.close();
 
     const page_count = doc.getPageCount();
@@ -102,9 +101,7 @@ pub fn run(
 
     if (args.output_path) |path| {
         output_file = std.fs.cwd().createFile(path, .{}) catch |err| {
-            try stderr.print("Error: Could not create output file: {}\n", .{err});
-            try stderr.flush();
-            std.process.exit(1);
+            shared.exitWithError(stderr, "Error: Could not create output file: {}\n", .{err});
         };
         out_writer = output_file.?.writer(&out_buf);
         output = &out_writer.interface;
@@ -113,45 +110,65 @@ pub fn run(
     // Extract text based on format
     switch (args.format) {
         .text => {
-            // Plain text extraction
-            var first_page = true;
-            for (1..page_count + 1) |i| {
-                const page_num: u32 = @intCast(i);
-
-                if (page_ranges) |ranges| {
-                    if (!cli_parsing.isPageInRanges(page_num, ranges)) continue;
-                }
-
-                var page = doc.loadPage(page_num - 1) catch continue;
-                defer page.close();
-
-                var text_page = page.loadTextPage() orelse continue;
-                defer text_page.close();
-
-                if (text_page.getText(allocator)) |text| {
-                    defer allocator.free(text);
-
-                    // Print page separator (only if explicitly specified and not first page)
-                    if (!first_page) {
-                        if (args.page_separator) |sep| {
-                            if (sep.len > 0) {
-                                // Replace {{PAGE_NO}} with actual page number
-                                try printPageSeparator(allocator, output, sep, page_num);
-                            } else {
-                                // Empty string = just extra newline
-                                try output.writeAll("\n");
-                            }
-                        }
+            if (page_ranges == null and args.page_separator == null) {
+                // Simple case: extract all pages using library function
+                _ = try lib_extract_text.extractText(allocator, &doc, output, 1, page_count);
+            } else {
+                // Complex case: page ranges or custom separators
+                var first_page_output = true;
+                for (1..page_count + 1) |page_num| {
+                    if (page_ranges) |ranges| {
+                        if (!cli_parsing.isPageInRanges(page_num, ranges)) continue;
                     }
 
-                    try output.writeAll(text);
-                    try output.writeAll("\n");
-                    first_page = false;
+                    var page = doc.loadPage(page_num - 1) catch continue;
+                    defer page.close();
+
+                    var text_page = page.loadTextPage() orelse continue;
+                    defer text_page.close();
+
+                    if (text_page.getText(allocator)) |text| {
+                        defer allocator.free(text);
+
+                        // Print page separator (only if explicitly specified and not first page)
+                        if (!first_page_output) {
+                            if (args.page_separator) |sep| {
+                                if (sep.len > 0) {
+                                    try printPageSeparator(allocator, output, sep, page_num);
+                                } else {
+                                    try output.writeAll("\n");
+                                }
+                            }
+                        }
+
+                        try output.writeAll(text);
+                        try output.writeAll("\n");
+                        first_page_output = false;
+                    }
                 }
             }
         },
         .json => {
-            try textfmt.extractTextAsJson(allocator, &doc, page_count, page_ranges, output);
+            // JSON text extraction - handle page ranges in CLI
+            if (page_ranges) |ranges| {
+                try output.writeAll("{\"pages\":[");
+                var first_json = true;
+                for (ranges) |range| {
+                    var page_num: usize = range.start;
+                    while (page_num <= range.end) : (page_num += 1) {
+                        var page = doc.loadPage(page_num - 1) catch continue;
+                        defer page.close();
+                        var text_page = page.loadTextPage() orelse continue;
+                        defer text_page.close();
+                        if (!first_json) try output.writeAll(",");
+                        first_json = false;
+                        try textfmt.writePageJson(allocator, &page, &text_page, page_num, output);
+                    }
+                }
+                try output.writeAll("]}\n");
+            } else {
+                try textfmt.extractTextAsJson(allocator, &doc, output, 1, page_count);
+            }
         },
     }
 
@@ -163,27 +180,23 @@ fn printPageSeparator(
     allocator: std.mem.Allocator,
     output: *std.Io.Writer,
     separator_template: []const u8,
-    page_num: u32,
+    page_num: usize,
 ) !void {
     // First, expand escape sequences like \n
     const expanded = try expandEscapeSequences(allocator, separator_template);
     defer allocator.free(expanded);
 
-    // Check if template contains {{PAGE_NO}}
-    if (std.mem.indexOf(u8, expanded, "{{PAGE_NO}}")) |pos| {
-        // Split and replace
-        const before = expanded[0..pos];
-        const after = expanded[pos + "{{PAGE_NO}}".len ..];
+    const placeholder = "{{PAGE_NO}}";
 
-        try output.writeAll(before);
+    // Replace all occurrences of {{PAGE_NO}}
+    var remaining = expanded[0..];
+    while (std.mem.indexOf(u8, remaining, placeholder)) |pos| {
+        try output.writeAll(remaining[0..pos]);
         try output.print("{d}", .{page_num});
-        try output.writeAll(after);
-        try output.writeAll("\n");
-    } else {
-        // No template variable, just print as-is
-        try output.writeAll(expanded);
-        try output.writeAll("\n");
+        remaining = remaining[pos + placeholder.len ..];
     }
+    try output.writeAll(remaining);
+    try output.writeAll("\n");
 }
 
 /// Expand escape sequences like \n to actual characters
@@ -225,7 +238,7 @@ fn expandEscapeSequences(allocator: std.mem.Allocator, input: []const u8) ![]u8 
     return result.toOwnedSlice();
 }
 
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig extract_text [options] <input.pdf>
         \\

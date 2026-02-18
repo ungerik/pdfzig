@@ -2,10 +2,7 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const cli_parsing = @import("../cli_parsing.zig");
-const textfmt = @import("../pdfcontent/textfmt.zig");
-const images = @import("../pdfcontent/images.zig");
-const main = @import("../main.zig");
+const cli_parsing = @import("arg_parsing.zig");
 const shared = @import("shared.zig");
 
 const PageSize = cli_parsing.PageSize;
@@ -14,18 +11,27 @@ const Args = struct {
     input_path: ?[]const u8 = null,
     content_file: ?[]const u8 = null,
     output_path: ?[]const u8 = null,
-    page_number: ?u32 = null, // 1-based page number to insert at
+    page_number: ?usize = null, // 1-based page number to insert at
     page_size: ?PageSize = null,
     password: ?[]const u8 = null,
     show_help: bool = false,
 };
 
+/// Run the add command: add a new page to a PDF document.
+/// The page can be empty or contain an image, text, or JSON-formatted content.
+/// Modifies the input file in-place unless -o is specified.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    arg_it: *cli_parsing.SliceArgIterator,
 ) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
+
     var args = Args{};
 
     while (arg_it.next()) |arg| {
@@ -36,16 +42,14 @@ pub fn run(
                 args.output_path = arg_it.next();
             } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--page")) {
                 if (arg_it.next()) |page_str| {
-                    args.page_number = std.fmt.parseInt(u32, page_str, 10) catch {
+                    args.page_number = std.fmt.parseInt(usize, page_str, 10) catch {
                         shared.exitWithError(stderr, "Invalid page number: {s}\n", .{page_str});
                     };
                 }
             } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--size")) {
                 if (arg_it.next()) |size_str| {
                     args.page_size = PageSize.parse(size_str) orelse {
-                        try stderr.print("Invalid size: {s}\n", .{size_str});
-                        try stderr.print("Use: A4, Letter, 210x297mm, 8.5x11in, 612x792pt, or 612x792\n", .{});
-                        shared.exitWithErrorMsg(stderr, "Add 'L' suffix for landscape: A4L, LetterL\n");
+                        shared.exitWithError(stderr, "Invalid size: {s}\nUse: A4, Letter, 210x297mm, 8.5x11in, 612x792pt, or 612x792\nAdd 'L' suffix for landscape: A4L, LetterL\n", .{size_str});
                     };
                 }
             } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
@@ -65,7 +69,7 @@ pub fn run(
         return;
     }
 
-    const input_path = shared.requireInputPath(args.input_path, stderr, stdout, printUsage);
+    const input_path = shared.requireInputPath(args.input_path, stderr);
 
     // Setup temp file for in-place editing
     const temp_ctx = shared.setupTempFileForInPlaceEdit(input_path, args.output_path, stderr);
@@ -89,35 +93,20 @@ pub fn run(
     } else PageSize{ .width = 612, .height = 792 }; // US Letter default
 
     // Determine insertion index (0-based)
-    const insert_index: u32 = if (args.page_number) |p|
+    const insert_index: usize = if (args.page_number) |p|
         if (p == 0) 0 else @min(p - 1, page_count)
     else
         page_count; // Insert at end
 
     // Create the new page
     var new_page = doc.createPage(insert_index, page_size.width, page_size.height) catch |err| {
-        try stderr.print("Error creating page: {}\n", .{err});
-        try stderr.flush();
-        std.process.exit(1);
+        shared.exitWithError(stderr, "Error creating page: {}\n", .{err});
     };
     defer new_page.close();
 
     // If content file is specified, add it to the page
     if (args.content_file) |content_path| {
-        const ext = std.fs.path.extension(content_path);
-        const is_text = std.mem.eql(u8, ext, ".txt") or std.mem.eql(u8, ext, ".text");
-        const is_json = std.mem.eql(u8, ext, ".json");
-
-        if (is_json) {
-            // Handle JSON file with formatted text blocks
-            try textfmt.addJsonToPage(allocator, &doc, &new_page, content_path, stderr);
-        } else if (is_text) {
-            // Handle text file
-            try textfmt.addTextToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
-        } else {
-            // Handle image file
-            try images.addImageToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
-        }
+        shared.addFileContentToPage(allocator, &doc, &new_page, content_path, page_size.width, page_size.height, stderr);
     }
 
     // Generate content for the new page
@@ -141,7 +130,7 @@ pub fn run(
     shared.reportSaveSuccess(stdout, temp_ctx.output_path, temp_ctx.input_path);
 }
 
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig add [options] <input.pdf> [content_file]
         \\

@@ -1,9 +1,7 @@
 //! Detach command - Remove attachments from PDF
 
 const std = @import("std");
-const pdfium = @import("../pdfium/pdfium.zig");
-const main = @import("../main.zig");
-const cli_parsing = @import("../cli_parsing.zig");
+const cli_parsing = @import("arg_parsing.zig");
 const shared = @import("shared.zig");
 
 const Args = struct {
@@ -15,12 +13,21 @@ const Args = struct {
     show_help: bool = false,
 };
 
+/// Run the detach command: remove file attachments from a PDF document.
+/// Attachments can be selected by index (-i) or glob pattern (-g).
+/// Modifies the input file in-place unless -o is specified.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
+    arg_it: *cli_parsing.SliceArgIterator,
 ) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
+
     var args = Args{};
     args.indices = std.array_list.Managed(u32).init(allocator);
     defer args.indices.deinit();
@@ -36,18 +43,14 @@ pub fn run(
             } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--index")) {
                 if (arg_it.next()) |idx_str| {
                     const idx = std.fmt.parseInt(u32, idx_str, 10) catch {
-                        try stderr.print("Invalid index: {s}\n", .{idx_str});
-                        try stderr.flush();
-                        std.process.exit(1);
+                        shared.exitWithError(stderr, "Invalid index: {s}\n", .{idx_str});
                     };
                     try args.indices.append(idx);
                 }
             } else if (std.mem.eql(u8, arg, "-P") or std.mem.eql(u8, arg, "--password")) {
                 args.password = arg_it.next();
             } else {
-                try stderr.print("Unknown option: {s}\n", .{arg});
-                try stderr.flush();
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else if (args.input_path == null) {
             args.input_path = arg;
@@ -59,13 +62,10 @@ pub fn run(
         return;
     }
 
-    const input_path = shared.requireInputPath(args.input_path, stderr, stdout, printUsage);
+    const input_path = shared.requireInputPath(args.input_path, stderr);
 
     if (args.glob_pattern == null and args.indices.items.len == 0) {
-        try stderr.writeAll("Error: Specify attachments to remove with -g (glob) or -i (index)\n\n");
-        try stderr.flush();
-        printUsage(stdout);
-        std.process.exit(1);
+        shared.exitWithErrorMsg(stderr, "Error: Specify attachments to remove with -g (glob) or -i (index)\n");
     }
 
     // Setup temp file for in-place editing
@@ -123,14 +123,15 @@ pub fn run(
     // Sort in descending order to delete from end first
     std.mem.sort(u32, indices_to_delete.items, {}, std.sort.desc(u32));
 
-    const deleted_count = indices_to_delete.items.len;
-
     // Delete attachments
+    var deleted_count: usize = 0;
     for (indices_to_delete.items) |idx| {
         doc.deleteAttachment(idx) catch |err| {
             try stderr.print("Error deleting attachment {d}: {}\n", .{ idx, err });
             try stderr.flush();
+            continue;
         };
+        deleted_count += 1;
     }
 
     // Save the document
@@ -145,7 +146,7 @@ pub fn run(
     shared.reportSaveSuccess(stdout, temp_ctx.output_path, temp_ctx.input_path);
 }
 
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig detach [options] <input.pdf>
         \\

@@ -155,7 +155,7 @@ fn createExpectedTestFilesRenderPageBitmaps(
 
     // Render each page
     for (0..page_count) |page_idx| {
-        var page = try doc.loadPage(@intCast(page_idx));
+        var page = try doc.loadPage(page_idx);
         defer page.close();
 
         // Calculate dimensions preserving aspect ratio
@@ -176,7 +176,7 @@ fn createExpectedTestFilesRenderPageBitmaps(
         );
         defer allocator.free(output_path);
 
-        try images.writeBitmap(bitmap, output_path, .{ .format = .png });
+        try images.writeBitmap(allocator, bitmap, output_path, .{ .format = .png });
         std.debug.print("Generated: {s}\n", .{output_path});
     }
 }
@@ -206,7 +206,7 @@ fn createExpectedTestFilesRotate90(
 
     // Rotate and render each page
     for (0..page_count) |page_idx| {
-        var page = try doc.loadPage(@intCast(page_idx));
+        var page = try doc.loadPage(page_idx);
         defer page.close();
 
         // Rotate 90° clockwise
@@ -228,7 +228,7 @@ fn createExpectedTestFilesRotate90(
         );
         defer allocator.free(output_path);
 
-        try images.writeBitmap(bitmap, output_path, .{ .format = .png });
+        try images.writeBitmap(allocator, bitmap, output_path, .{ .format = .png });
         std.debug.print("Generated: {s}\n", .{output_path});
     }
 }
@@ -258,7 +258,7 @@ fn createExpectedTestFilesMirrorHorizontal(
 
     // Mirror and render each page
     for (0..page_count) |page_idx| {
-        var page = try doc.loadPage(@intCast(page_idx));
+        var page = try doc.loadPage(page_idx);
         defer page.close();
 
         // Apply horizontal mirror transformation to all objects
@@ -291,7 +291,7 @@ fn createExpectedTestFilesMirrorHorizontal(
         );
         defer allocator.free(output_path);
 
-        try images.writeBitmap(bitmap, output_path, .{ .format = .png });
+        try images.writeBitmap(allocator, bitmap, output_path, .{ .format = .png });
         std.debug.print("Generated: {s}\n", .{output_path});
     }
 }
@@ -321,7 +321,7 @@ fn createExpectedTestFilesMirrorVertical(
 
     // Mirror and render each page
     for (0..page_count) |page_idx| {
-        var page = try doc.loadPage(@intCast(page_idx));
+        var page = try doc.loadPage(page_idx);
         defer page.close();
 
         // Apply vertical mirror transformation to all objects
@@ -354,7 +354,7 @@ fn createExpectedTestFilesMirrorVertical(
         );
         defer allocator.free(output_path);
 
-        try images.writeBitmap(bitmap, output_path, .{ .format = .png });
+        try images.writeBitmap(allocator, bitmap, output_path, .{ .format = .png });
         std.debug.print("Generated: {s}\n", .{output_path});
     }
 }
@@ -384,7 +384,7 @@ fn createExpectedTestFilesRotate180(
 
     // Rotate and render each page
     for (0..page_count) |page_idx| {
-        var page = try doc.loadPage(@intCast(page_idx));
+        var page = try doc.loadPage(page_idx);
         defer page.close();
 
         // Rotate 180°
@@ -406,7 +406,7 @@ fn createExpectedTestFilesRotate180(
         );
         defer allocator.free(output_path);
 
-        try images.writeBitmap(bitmap, output_path, .{ .format = .png });
+        try images.writeBitmap(allocator, bitmap, output_path, .{ .format = .png });
         std.debug.print("Generated: {s}\n", .{output_path});
     }
 }
@@ -436,7 +436,7 @@ fn createExpectedTestFilesRotate270(
 
     // Rotate and render each page
     for (0..page_count) |page_idx| {
-        var page = try doc.loadPage(@intCast(page_idx));
+        var page = try doc.loadPage(page_idx);
         defer page.close();
 
         // Rotate 270° clockwise
@@ -458,7 +458,7 @@ fn createExpectedTestFilesRotate270(
         );
         defer allocator.free(output_path);
 
-        try images.writeBitmap(bitmap, output_path, .{ .format = .png });
+        try images.writeBitmap(allocator, bitmap, output_path, .{ .format = .png });
         std.debug.print("Generated: {s}\n", .{output_path});
     }
 }

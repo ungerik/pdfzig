@@ -3,19 +3,28 @@
 const std = @import("std");
 const downloader = @import("../pdfium/downloader.zig");
 const loader = @import("../pdfium/loader.zig");
-const main = @import("../main.zig");
+const cli_parsing = @import("arg_parsing.zig");
+const shared = @import("shared.zig");
 
 const Args = struct {
     build_version: ?u32 = null,
     show_help: bool = false,
 };
 
+/// Run the download_pdfium command: download the PDFium library for the current platform.
+/// Optionally accepts a specific Chromium build version; defaults to latest.
+/// The library is installed next to the pdfzig executable.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
-) void {
+    arg_it: *cli_parsing.SliceArgIterator,
+) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
     var args = Args{};
 
     while (arg_it.next()) |arg| {
@@ -23,56 +32,48 @@ pub fn run(
             if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
                 args.show_help = true;
             } else {
-                stderr.print("Unknown option: {s}\n", .{arg}) catch {};
-                stderr.flush() catch {};
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else {
             // Parse version number
             args.build_version = std.fmt.parseInt(u32, arg, 10) catch {
-                stderr.print("Error: Invalid build version '{s}'\n", .{arg}) catch {};
-                stderr.flush() catch {};
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Error: Invalid build version '{s}'\n", .{arg});
             };
         }
     }
 
     if (args.show_help) {
         printUsage(stdout);
-        stdout.flush() catch {};
+        try stdout.flush();
         return;
     }
 
     // Get the executable directory
     const exe_dir = loader.getExecutableDir(allocator) catch |err| {
-        stderr.print("Error: Could not determine executable directory: {}\n", .{err}) catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
+        shared.exitWithError(stderr, "Error: Could not determine executable directory: {}\n", .{err});
     };
     defer allocator.free(exe_dir);
 
     if (args.build_version) |ver| {
-        stdout.print("Downloading PDFium build {d}...\n", .{ver}) catch {};
+        try stdout.print("Downloading PDFium build {d}...\n", .{ver});
     } else {
-        stdout.writeAll("Downloading latest PDFium build...\n") catch {};
+        try stdout.writeAll("Downloading latest PDFium build...\n");
     }
-    stdout.flush() catch {};
+    try stdout.flush();
 
     _ = downloader.downloadPdfiumWithProgress(allocator, args.build_version, exe_dir, downloader.displayProgress) catch |err| {
         stdout.writeAll("\n") catch {}; // Clear progress line on error
-        stderr.print("Error: Download failed: {}\n", .{err}) catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
+        shared.exitWithError(stderr, "Error: Download failed: {}\n", .{err});
     };
 
     // Show info about installed library
     if (loader.findBestPdfiumLibrary(allocator, exe_dir) catch null) |lib_info| {
         defer allocator.free(lib_info.path);
-        stdout.print("Library installed at: {s}\n", .{lib_info.path}) catch {};
+        try stdout.print("Library installed at: {s}\n", .{lib_info.path});
     }
 }
 
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig download_pdfium [build]
         \\

@@ -3,7 +3,8 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const main = @import("../main.zig");
+const shared = @import("shared.zig");
+const cli_parsing = @import("../cli/arg_parsing.zig");
 const test_utils = @import("../test_utils.zig");
 
 const test_cache_dir = "test-cache/zugferd";
@@ -151,7 +152,7 @@ test "xml: ZUGFeRD PDFs contain expected XML file" {
     }
 }
 
-test "xml: isXml correctly identifies XML attachments" {
+test "xml: hasXmlExtension correctly identifies XML attachments" {
     // Skip if RUN_NETWORK_TESTS env var is not set
     if (std.process.getEnvVarOwned(std.testing.allocator, "RUN_NETWORK_TESTS")) |val| {
         std.testing.allocator.free(val);
@@ -183,7 +184,7 @@ test "xml: isXml correctly identifies XML attachments" {
             if (name) |n| {
                 defer allocator.free(n);
                 if (std.mem.eql(u8, n, tf.expected_xml_name)) {
-                    try std.testing.expect(attachment.isXml(allocator));
+                    try std.testing.expect(shared.hasXmlExtension(n));
                     break;
                 }
             }
@@ -340,47 +341,47 @@ test "xml: ZUGFeRD v2/Factur-X contains factur-x.xml" {
 // ============================================================================
 
 test "glob: exact match" {
-    try std.testing.expect(main.matchGlobPattern("test.xml", "test.xml"));
-    try std.testing.expect(!main.matchGlobPattern("test.xml", "test.json"));
-    try std.testing.expect(!main.matchGlobPattern("test.xml", "test.xmlx"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("test.xml", "test.xml"));
+    try std.testing.expect(!cli_parsing.matchGlobPatternCaseInsensitive("test.xml", "test.json"));
+    try std.testing.expect(!cli_parsing.matchGlobPatternCaseInsensitive("test.xml", "test.xmlx"));
 }
 
 test "glob: star wildcard" {
     // *.xml matches any .xml file
-    try std.testing.expect(main.matchGlobPattern("*.xml", "test.xml"));
-    try std.testing.expect(main.matchGlobPattern("*.xml", "invoice.xml"));
-    try std.testing.expect(main.matchGlobPattern("*.xml", "ZUGFeRD-invoice.xml"));
-    try std.testing.expect(!main.matchGlobPattern("*.xml", "test.json"));
-    try std.testing.expect(!main.matchGlobPattern("*.xml", "test.xmlx"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*.xml", "test.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*.xml", "invoice.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*.xml", "ZUGFeRD-invoice.xml"));
+    try std.testing.expect(!cli_parsing.matchGlobPatternCaseInsensitive("*.xml", "test.json"));
+    try std.testing.expect(!cli_parsing.matchGlobPatternCaseInsensitive("*.xml", "test.xmlx"));
 
     // test.* matches test with any extension
-    try std.testing.expect(main.matchGlobPattern("test.*", "test.xml"));
-    try std.testing.expect(main.matchGlobPattern("test.*", "test.json"));
-    try std.testing.expect(!main.matchGlobPattern("test.*", "other.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("test.*", "test.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("test.*", "test.json"));
+    try std.testing.expect(!cli_parsing.matchGlobPatternCaseInsensitive("test.*", "other.xml"));
 
     // *invoice* matches anything containing invoice
-    try std.testing.expect(main.matchGlobPattern("*invoice*", "invoice.xml"));
-    try std.testing.expect(main.matchGlobPattern("*invoice*", "ZUGFeRD-invoice.xml"));
-    try std.testing.expect(main.matchGlobPattern("*invoice*", "my-invoice-2024.pdf"));
-    try std.testing.expect(!main.matchGlobPattern("*invoice*", "factur-x.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*invoice*", "invoice.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*invoice*", "ZUGFeRD-invoice.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*invoice*", "my-invoice-2024.pdf"));
+    try std.testing.expect(!cli_parsing.matchGlobPatternCaseInsensitive("*invoice*", "factur-x.xml"));
 }
 
 test "glob: question mark wildcard" {
-    try std.testing.expect(main.matchGlobPattern("test?.xml", "test1.xml"));
-    try std.testing.expect(main.matchGlobPattern("test?.xml", "testA.xml"));
-    try std.testing.expect(!main.matchGlobPattern("test?.xml", "test.xml"));
-    try std.testing.expect(!main.matchGlobPattern("test?.xml", "test12.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("test?.xml", "test1.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("test?.xml", "testA.xml"));
+    try std.testing.expect(!cli_parsing.matchGlobPatternCaseInsensitive("test?.xml", "test.xml"));
+    try std.testing.expect(!cli_parsing.matchGlobPatternCaseInsensitive("test?.xml", "test12.xml"));
 }
 
 test "glob: case insensitive" {
-    try std.testing.expect(main.matchGlobPattern("*.XML", "test.xml"));
-    try std.testing.expect(main.matchGlobPattern("*.xml", "TEST.XML"));
-    try std.testing.expect(main.matchGlobPattern("Test.xml", "test.xml"));
-    try std.testing.expect(main.matchGlobPattern("test.xml", "TEST.XML"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*.XML", "test.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*.xml", "TEST.XML"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("Test.xml", "test.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("test.xml", "TEST.XML"));
 }
 
 test "glob: factur-x pattern" {
-    try std.testing.expect(main.matchGlobPattern("factur-x.xml", "factur-x.xml"));
-    try std.testing.expect(main.matchGlobPattern("factur*.xml", "factur-x.xml"));
-    try std.testing.expect(main.matchGlobPattern("*factur*", "factur-x.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("factur-x.xml", "factur-x.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("factur*.xml", "factur-x.xml"));
+    try std.testing.expect(cli_parsing.matchGlobPatternCaseInsensitive("*factur*", "factur-x.xml"));
 }

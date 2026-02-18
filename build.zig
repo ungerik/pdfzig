@@ -1,6 +1,19 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Add pdfzig library dependencies to a module
+fn addPdfzigDeps(
+    mod: *std.Build.Module,
+    zigimg_mod: *std.Build.Module,
+    zstbi_mod: *std.Build.Module,
+    glob_mod: *std.Build.Module,
+) void {
+    mod.addImport("zigimg", zigimg_mod);
+    mod.addImport("zstbi", zstbi_mod);
+    mod.addImport("glob", glob_mod);
+    mod.link_libc = true;
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -23,42 +36,38 @@ pub fn build(b: *std.Build) void {
         });
     }
 
-    // Get zigimg dependency
+    // Get dependencies
     const zigimg_dep = b.dependency("zigimg", .{
         .target = target,
         .optimize = optimize,
     });
 
-    // Get zstbi dependency for JPEG encoding
     const zstbi_dep = b.dependency("zstbi", .{
         .target = target,
         .optimize = optimize,
     });
 
-    // Get glob dependency
     const glob_dep = b.dependency("glob", .{
         .target = target,
         .optimize = optimize,
     });
 
-    // Create the main module
+    // Create pdfzig library module
+    const pdfzig_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addPdfzigDeps(pdfzig_mod, zigimg_dep.module("zigimg"), zstbi_dep.module("root"), glob_dep.module("glob"));
+
+    // Create the main executable module
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-
-    // Add zigimg import
-    exe_mod.addImport("zigimg", zigimg_dep.module("zigimg"));
-
-    // Add zstbi import for JPEG encoding
-    exe_mod.addImport("zstbi", zstbi_dep.module("root"));
-
-    // Add glob import
-    exe_mod.addImport("glob", glob_dep.module("glob"));
-
-    // Link libc for dlopen on Unix
-    exe_mod.link_libc = true;
+    addPdfzigDeps(exe_mod, zigimg_dep.module("zigimg"), zstbi_dep.module("root"), glob_dep.module("glob"));
+    exe_mod.addImport("pdfzig", pdfzig_mod);
 
     // Build the executable
     const exe = b.addExecutable(.{
@@ -101,11 +110,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
-    test_mod.addImport("zigimg", zigimg_dep.module("zigimg"));
-    test_mod.addImport("zstbi", zstbi_dep.module("root"));
-    test_mod.addImport("glob", glob_dep.module("glob"));
-    test_mod.link_libc = true;
+    addPdfzigDeps(test_mod, zigimg_dep.module("zigimg"), zstbi_dep.module("root"), glob_dep.module("glob"));
+    test_mod.addImport("pdfzig", pdfzig_mod);
 
     const unit_tests = b.addTest(.{
         .root_module = test_mod,
@@ -122,11 +128,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/build_golden_files_helper.zig"),
         .target = b.graph.host,
     });
-
-    // Import dependencies needed for golden file generation
-    golden_files_helper_mod.addImport("zigimg", zigimg_dep.module("zigimg"));
-    golden_files_helper_mod.addImport("zstbi", zstbi_dep.module("root"));
-    golden_files_helper_mod.link_libc = true;
+    addPdfzigDeps(golden_files_helper_mod, zigimg_dep.module("zigimg"), zstbi_dep.module("root"), glob_dep.module("glob"));
 
     const golden_files_helper = b.addExecutable(.{
         .name = "build_golden_files_helper",
@@ -165,7 +167,7 @@ pub fn build(b: *std.Build) void {
     // Cross-compile for all supported platforms
     const all_step = b.step("all", "Build for all supported platforms");
 
-    const targets: []const std.Target.Query = &.{
+    const cross_targets: []const std.Target.Query = &.{
         .{ .cpu_arch = .x86_64, .os_tag = .macos },
         .{ .cpu_arch = .aarch64, .os_tag = .macos },
         .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
@@ -176,7 +178,7 @@ pub fn build(b: *std.Build) void {
         .{ .cpu_arch = .aarch64, .os_tag = .windows },
     };
 
-    for (targets) |t| {
+    for (cross_targets) |t| {
         const cross_target = b.resolveTargetQuery(t);
 
         const cross_zigimg = b.dependency("zigimg", .{
@@ -194,16 +196,20 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
+        const cross_pdfzig_mod = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = cross_target,
+            .optimize = optimize,
+        });
+        addPdfzigDeps(cross_pdfzig_mod, cross_zigimg.module("zigimg"), cross_zstbi.module("root"), cross_glob.module("glob"));
+
         const cross_mod = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = cross_target,
             .optimize = optimize,
         });
-
-        cross_mod.addImport("zigimg", cross_zigimg.module("zigimg"));
-        cross_mod.addImport("zstbi", cross_zstbi.module("root"));
-        cross_mod.addImport("glob", cross_glob.module("glob"));
-        cross_mod.link_libc = true;
+        addPdfzigDeps(cross_mod, cross_zigimg.module("zigimg"), cross_zstbi.module("root"), cross_glob.module("glob"));
+        cross_mod.addImport("pdfzig", cross_pdfzig_mod);
 
         const cross_exe = b.addExecutable(.{
             .name = "pdfzig",

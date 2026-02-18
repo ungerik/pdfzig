@@ -21,35 +21,28 @@
 
 const std = @import("std");
 const pdfium = @import("pdfium/pdfium.zig");
-const images = @import("pdfcontent/images.zig");
-const downloader = @import("pdfium/downloader.zig");
-const loader = @import("pdfium/loader.zig");
-const zigimg = @import("zigimg");
-const cli_parsing = @import("cli_parsing.zig");
+const cli_parsing = @import("cli/arg_parsing.zig");
 
-// Command modules
-const cmd_info = @import("cmd/info.zig");
-const cmd_render = @import("cmd/render.zig");
-const cmd_extract_text = @import("cmd/extract_text.zig");
-const cmd_extract_images = @import("cmd/extract_images.zig");
-const cmd_extract_attachments = @import("cmd/extract_attachments.zig");
-const cmd_visual_diff = @import("cmd/visual_diff.zig");
-const cmd_download_pdfium = @import("cmd/download_pdfium.zig");
-const cmd_rotate = @import("cmd/rotate.zig");
-const cmd_mirror = @import("cmd/mirror.zig");
-const cmd_delete = @import("cmd/delete.zig");
-const cmd_add = @import("cmd/add.zig");
-const cmd_create = @import("cmd/create.zig");
-const cmd_attach = @import("cmd/attach.zig");
-const cmd_detach = @import("cmd/detach.zig");
+// Command modules (CLI implementations)
+const cmd_info = @import("cli/info.zig");
+const cmd_render = @import("cli/render.zig");
+const cmd_extract_text = @import("cli/extract_text.zig");
+const cmd_extract_images = @import("cli/extract_images.zig");
+const cmd_extract_attachments = @import("cli/extract_attachments.zig");
+const cmd_visual_diff = @import("cli/visual_diff.zig");
+const cmd_download_pdfium = @import("cli/download_pdfium.zig");
+const cmd_rotate = @import("cli/rotate.zig");
+const cmd_mirror = @import("cli/mirror.zig");
+const cmd_delete = @import("cli/delete.zig");
+const cmd_add = @import("cli/add.zig");
+const cmd_create = @import("cli/create.zig");
+const cmd_attach = @import("cli/attach.zig");
+const cmd_detach = @import("cli/detach.zig");
 
 const version = "0.1.0";
 
 const Command = cli_parsing.Command;
-pub const SliceArgIterator = cli_parsing.SliceArgIterator;
-const PageSize = cli_parsing.PageSize;
-const OutputSpec = cli_parsing.OutputSpec;
-const parseResolution = cli_parsing.parseResolution;
+const SliceArgIterator = cli_parsing.SliceArgIterator;
 
 pub fn main() !void {
     // Use arena allocator - the app runs one command then exits,
@@ -113,8 +106,8 @@ pub fn main() !void {
             try stderr.flush();
             std.process.exit(1);
         };
-        try stdout.print("Loaded PDFium from: {s}\n", .{library_path});
-        try stdout.flush();
+        try stderr.print("Loaded PDFium from: {s}\n", .{library_path});
+        try stderr.flush();
     }
 
     // Now parse the command from remaining args
@@ -189,8 +182,7 @@ pub fn main() !void {
 
     // Handle download_pdfium command separately (manages PDFium library)
     if (command == .download_pdfium) {
-        cmd_download_pdfium.run(allocator, &cmd_arg_it, stdout, stderr);
-        try stdout.flush();
+        try cmd_download_pdfium.run(allocator, &cmd_arg_it);
         return;
     }
 
@@ -204,49 +196,23 @@ pub fn main() !void {
     defer pdfium.deinit();
 
     switch (command) {
-        .render => try cmd_render.run(allocator, &cmd_arg_it, stdout, stderr),
-        .extract_text => try cmd_extract_text.run(allocator, &cmd_arg_it, stdout, stderr),
-        .extract_images => try cmd_extract_images.run(allocator, &cmd_arg_it, stdout, stderr),
-        .extract_attachments => try cmd_extract_attachments.run(allocator, &cmd_arg_it, stdout, stderr),
-        .visual_diff => cmd_visual_diff.run(allocator, &cmd_arg_it, stdout, stderr),
-        .info => try cmd_info.run(allocator, &cmd_arg_it, stdout, stderr),
-        .rotate => try cmd_rotate.run(allocator, &cmd_arg_it, stdout, stderr),
-        .mirror => try cmd_mirror.run(allocator, &cmd_arg_it, stdout, stderr),
-        .delete => try cmd_delete.run(allocator, &cmd_arg_it, stdout, stderr),
-        .add => try cmd_add.run(allocator, &cmd_arg_it, stdout, stderr),
-        .create => try cmd_create.run(allocator, &cmd_arg_it, stdout, stderr),
-        .attach => try cmd_attach.run(allocator, &cmd_arg_it, stdout, stderr),
-        .detach => try cmd_detach.run(allocator, &cmd_arg_it, stdout, stderr),
+        .render => try cmd_render.run(allocator, &cmd_arg_it),
+        .extract_text => try cmd_extract_text.run(allocator, &cmd_arg_it),
+        .extract_images => try cmd_extract_images.run(allocator, &cmd_arg_it),
+        .extract_attachments => try cmd_extract_attachments.run(allocator, &cmd_arg_it),
+        .visual_diff => try cmd_visual_diff.run(allocator, &cmd_arg_it),
+        .info => try cmd_info.run(allocator, &cmd_arg_it),
+        .rotate => try cmd_rotate.run(allocator, &cmd_arg_it),
+        .mirror => try cmd_mirror.run(allocator, &cmd_arg_it),
+        .delete => try cmd_delete.run(allocator, &cmd_arg_it),
+        .add => try cmd_add.run(allocator, &cmd_arg_it),
+        .create => try cmd_create.run(allocator, &cmd_arg_it),
+        .attach => try cmd_attach.run(allocator, &cmd_arg_it),
+        .detach => try cmd_detach.run(allocator, &cmd_arg_it),
         .download_pdfium => unreachable, // Handled above
-        .help => printMainUsage(stdout, pdfium.getVersion(), pdfium.getLibraryPath()),
-        .version_cmd => try stdout.print("pdfzig {s}\n", .{version}),
     }
 
     try stdout.flush();
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-pub fn openDocument(allocator: std.mem.Allocator, path: []const u8, password: ?[]const u8, stderr: *std.Io.Writer) ?pdfium.Document {
-    if (password) |pwd| {
-        return pdfium.Document.openWithPassword(allocator, path, pwd) catch |err| {
-            stderr.print("Error: {}\n", .{err}) catch {};
-            stderr.flush() catch {};
-            return null;
-        };
-    } else {
-        return pdfium.Document.open(allocator, path) catch |err| {
-            if (err == pdfium.Error.PasswordRequired) {
-                stderr.writeAll("Error: PDF is password protected. Use -P to provide password.\n") catch {};
-            } else {
-                stderr.print("Error: {}\n", .{err}) catch {};
-            }
-            stderr.flush() catch {};
-            return null;
-        };
-    }
 }
 
 // ============================================================================
@@ -303,10 +269,13 @@ fn printMainUsage(stdout: *std.Io.Writer, pdfium_version: ?u32, pdfium_path: ?[]
 
 test {
     // Import test modules to include their tests
-    _ = @import("cmd/info_test.zig");
-    _ = @import("cmd/extract_text.zig");
-    _ = @import("cli_parsing.zig");
+    _ = @import("pdfzig/info_test.zig");
+    _ = @import("pdfzig/extract_attachments_test.zig");
+    _ = @import("cli/extract_text.zig"); // TextOutputFormat test
+    _ = @import("cli/render.zig"); // formatOutputPath tests
+    _ = @import("cli/arg_parsing.zig");
     _ = @import("pdfcontent/images.zig");
     _ = @import("pdfcontent/textfmt.zig");
+    _ = @import("pdf/xmp.zig");
     _ = @import("test_golden_files_test.zig");
 }

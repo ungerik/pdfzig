@@ -2,10 +2,10 @@
 
 const std = @import("std");
 const pdfium = @import("../pdfium/pdfium.zig");
-const cli_parsing = @import("../cli_parsing.zig");
+const cli_parsing = @import("arg_parsing.zig");
 const shared = @import("shared.zig");
 const zigimg = @import("zigimg");
-const main = @import("../main.zig");
+const lib_render = @import("../pdfzig/render.zig");
 
 const parseResolution = cli_parsing.parseResolution;
 
@@ -36,12 +36,21 @@ const Args = struct {
     invert: bool = false,
 };
 
+/// Run the visual_diff command: compare two PDFs by rendering and diffing pixels.
+/// Exits with code 0 if identical, 1 if differences are found.
+/// Optionally writes diff images in rgb, grayscale, or contrast mode.
 pub fn run(
     allocator: std.mem.Allocator,
-    arg_it: *main.SliceArgIterator,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
-) void {
+    arg_it: *cli_parsing.SliceArgIterator,
+) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    defer stdout.flush() catch {};
+
     var args = Args{};
 
     while (arg_it.next()) |arg| {
@@ -52,14 +61,10 @@ pub fn run(
                 args.quiet = true;
             } else if (std.mem.eql(u8, arg, "-r") or std.mem.eql(u8, arg, "--resolution")) {
                 const res_str = arg_it.next() orelse {
-                    stderr.writeAll("Error: --resolution requires an argument\n") catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
+                    shared.exitWithErrorMsg(stderr, "Error: --resolution requires an argument\n");
                 };
                 args.dpi = parseResolution(res_str) orelse {
-                    stderr.print("Error: Invalid resolution value '{s}'\n", .{res_str}) catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
+                    shared.exitWithError(stderr, "Error: Invalid resolution value '{s}'\n", .{res_str});
                 };
             } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
                 args.output_dir = arg_it.next();
@@ -76,21 +81,15 @@ pub fn run(
                 args.password2 = arg_it.next();
             } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--colors")) {
                 const mode_str = arg_it.next() orelse {
-                    stderr.writeAll("Error: --colors requires an argument (rgb, gray, or contrast)\n") catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
+                    shared.exitWithErrorMsg(stderr, "Error: --colors requires an argument (rgb, gray, or contrast)\n");
                 };
                 args.color_mode = ColorMode.fromString(mode_str) orelse {
-                    stderr.print("Error: Invalid color mode '{s}'. Use rgb, gray, or contrast.\n", .{mode_str}) catch {};
-                    stderr.flush() catch {};
-                    std.process.exit(1);
+                    shared.exitWithError(stderr, "Error: Invalid color mode '{s}'. Use rgb, gray, or contrast.\n", .{mode_str});
                 };
             } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--invert")) {
                 args.invert = true;
             } else {
-                stderr.print("Unknown option: {s}\n", .{arg}) catch {};
-                stderr.flush() catch {};
-                std.process.exit(1);
+                shared.exitWithError(stderr, "Unknown option: {s}\n", .{arg});
             }
         } else {
             if (args.input1 == null) {
@@ -103,118 +102,79 @@ pub fn run(
 
     if (args.show_help) {
         printUsage(stdout);
-        stdout.flush() catch {};
         return;
     }
 
     const input1 = args.input1 orelse {
-        stderr.writeAll("Error: No input PDF files specified\n\n") catch {};
-        stderr.flush() catch {};
-        printUsage(stdout);
-        stdout.flush() catch {};
-        std.process.exit(1);
+        shared.exitWithErrorMsg(stderr, "Error: No input PDF files specified\n");
     };
 
     const input2 = args.input2 orelse {
-        stderr.writeAll("Error: Second input PDF file not specified\n\n") catch {};
-        stderr.flush() catch {};
-        printUsage(stdout);
-        stdout.flush() catch {};
-        std.process.exit(1);
+        shared.exitWithErrorMsg(stderr, "Error: Second input PDF file not specified\n");
     };
 
     // Create output directory if specified
     if (args.output_dir) |out_dir| {
         std.fs.cwd().makePath(out_dir) catch |err| {
-            stderr.print("Error: Could not create output directory: {}\n", .{err}) catch {};
-            stderr.flush() catch {};
-            std.process.exit(1);
+            shared.exitWithError(stderr, "Error: Could not create output directory: {}\n", .{err});
         };
     }
 
     // Open both documents
-    var doc1 = main.openDocument(allocator, input1, args.password1, stderr) orelse std.process.exit(1);
+    var doc1 = shared.openDocumentOrExit(allocator, input1, args.password1, stderr);
     defer doc1.close();
 
-    var doc2 = main.openDocument(allocator, input2, args.password2, stderr) orelse std.process.exit(1);
+    var doc2 = shared.openDocumentOrExit(allocator, input2, args.password2, stderr);
     defer doc2.close();
 
     const page_count1 = doc1.getPageCount();
     const page_count2 = doc2.getPageCount();
 
     if (page_count1 != page_count2) {
-        stderr.print("Error: Page count mismatch: {s} has {d} pages, {s} has {d} pages\n", .{
+        shared.exitWithError(stderr, "Error: Page count mismatch: {s} has {d} pages, {s} has {d} pages\n", .{
             input1,
             page_count1,
             input2,
             page_count2,
-        }) catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
+        });
     }
 
     if (page_count1 == 0) {
-        stderr.writeAll("Error: PDFs have no pages\n") catch {};
-        stderr.flush() catch {};
-        std.process.exit(1);
+        shared.exitWithErrorMsg(stderr, "Error: PDFs have no pages\n");
     }
 
     var total_diff_pixels: u64 = 0;
     var has_differences = false;
 
     for (0..page_count1) |page_idx| {
-        const page_num: u32 = @intCast(page_idx);
-
         // Load pages
-        var page1 = doc1.loadPage(page_num) catch {
-            stderr.print("Error: Could not load page {d} from first PDF\n", .{page_num + 1}) catch {};
-            stderr.flush() catch {};
-            std.process.exit(1);
+        var page1 = doc1.loadPage(page_idx) catch {
+            shared.exitWithError(stderr, "Error: Could not load page {d} from first PDF\n", .{page_idx + 1});
         };
         defer page1.close();
 
-        var page2 = doc2.loadPage(page_num) catch {
-            stderr.print("Error: Could not load page {d} from second PDF\n", .{page_num + 1}) catch {};
-            stderr.flush() catch {};
-            std.process.exit(1);
+        var page2 = doc2.loadPage(page_idx) catch {
+            shared.exitWithError(stderr, "Error: Could not load page {d} from second PDF\n", .{page_idx + 1});
         };
         defer page2.close();
 
-        // Use page dimensions from first PDF at specified DPI
-        const dims = page1.getDimensionsAtDpi(args.dpi);
-
-        // Create bitmaps
-        var bitmap1 = pdfium.Bitmap.create(dims.width, dims.height, .bgra) catch {
-            stderr.print("Error: Could not create bitmap for page {d}\n", .{page_num + 1}) catch {};
-            stderr.flush() catch {};
-            std.process.exit(1);
+        // Render both pages to bitmaps at specified DPI
+        var bitmap1 = lib_render.renderPageToBitmap(&page1, args.dpi) catch {
+            shared.exitWithError(stderr, "Error: Could not create bitmap for page {d}\n", .{page_idx + 1});
         };
         defer bitmap1.destroy();
 
-        var bitmap2 = pdfium.Bitmap.create(dims.width, dims.height, .bgra) catch {
-            stderr.print("Error: Could not create bitmap for page {d}\n", .{page_num + 1}) catch {};
-            stderr.flush() catch {};
-            std.process.exit(1);
+        var bitmap2 = lib_render.renderPageToBitmap(&page2, args.dpi) catch {
+            shared.exitWithError(stderr, "Error: Could not create bitmap for page {d}\n", .{page_idx + 1});
         };
         defer bitmap2.destroy();
 
-        // Fill with white and render
-        bitmap1.fillWhite();
-        page1.render(&bitmap1, .{});
-
-        bitmap2.fillWhite();
-        page2.render(&bitmap2, .{});
-
         // Compare pixels
         const data1 = bitmap1.getData() orelse {
-            stderr.print("Error: Could not get buffer for page {d}\n", .{page_num + 1}) catch {};
-            stderr.flush() catch {};
-            std.process.exit(1);
+            shared.exitWithError(stderr, "Error: Could not get buffer for page {d}\n", .{page_idx + 1});
         };
         const data2 = bitmap2.getData() orelse {
-            stderr.print("Error: Could not get buffer for page {d}\n", .{page_num + 1}) catch {};
-            stderr.flush() catch {};
-            std.process.exit(1);
+            shared.exitWithError(stderr, "Error: Could not get buffer for page {d}\n", .{page_idx + 1});
         };
         const stride = bitmap1.stride;
         const width = bitmap1.width;
@@ -230,9 +190,7 @@ pub fn run(
 
         if (args.output_dir != null) {
             diff_buffer = allocator.alloc(u8, @as(usize, width) * @as(usize, height) * bytes_per_pixel) catch {
-                stderr.writeAll("Error: Could not allocate diff buffer\n") catch {};
-                stderr.flush() catch {};
-                std.process.exit(1);
+                shared.exitWithErrorMsg(stderr, "Error: Could not allocate diff buffer\n");
             };
         }
 
@@ -311,86 +269,44 @@ pub fn run(
         }
 
         if (!args.quiet) {
-            stdout.print("Page {d}: {d} different pixels\n", .{ page_num + 1, page_diff_pixels }) catch {};
+            try stdout.print("Page {d}: {d} different pixels\n", .{ page_idx + 1, page_diff_pixels });
         }
 
         // Write diff image if requested
         if (args.output_dir) |out_dir| {
             if (diff_buffer) |buf| {
                 var filename_buf: [256]u8 = undefined;
-                const filename = std.fmt.bufPrint(&filename_buf, "diff_page{d}.png", .{page_num + 1}) catch continue;
+                const filename = std.fmt.bufPrint(&filename_buf, "diff_page{d}.png", .{page_idx + 1}) catch continue;
 
                 const output_path = std.fs.path.join(allocator, &.{ out_dir, filename }) catch continue;
                 defer allocator.free(output_path);
 
                 const write_result = switch (args.color_mode) {
-                    .rgb => writeRgbPng(buf, width, height, output_path),
-                    .gray, .contrast => writeGrayscalePng(buf, width, height, output_path),
+                    .rgb => writeRgbPng(allocator, buf, width, height, output_path),
+                    .gray, .contrast => writeGrayscalePng(allocator, buf, width, height, output_path),
                 };
 
                 write_result catch |err| {
-                    stderr.print("Warning: Could not write diff image: {}\n", .{err}) catch {};
-                    stderr.flush() catch {};
+                    try stderr.print("Warning: Could not write diff image: {}\n", .{err});
+                    try stderr.flush();
                 };
 
                 if (!args.quiet) {
-                    stdout.print("  Wrote: {s}\n", .{output_path}) catch {};
+                    try stdout.print("  Wrote: {s}\n", .{output_path});
                 }
             }
         }
     }
 
-    stdout.print("\nTotal different pixels: {d}\n", .{total_diff_pixels}) catch {};
-    stdout.flush() catch {};
+    try stdout.print("\nTotal different pixels: {d}\n", .{total_diff_pixels});
+    try stdout.flush();
 
     if (has_differences) {
         std.process.exit(1);
     }
 }
 
-fn writeGrayscalePng(data: []u8, width: u32, height: u32, path: []const u8) !void {
-    // Create grayscale pixel data slice with correct type
-    const pixel_data: []zigimg.color.Grayscale8 = @as(
-        [*]zigimg.color.Grayscale8,
-        @ptrCast(data.ptr),
-    )[0 .. @as(usize, width) * @as(usize, height)];
-
-    // Create image with grayscale pixels
-    const img = zigimg.Image{
-        .width = width,
-        .height = height,
-        .pixels = .{ .grayscale8 = pixel_data },
-    };
-
-    // Write to file with best filter choice for compression
-    var write_buffer: [4096]u8 = undefined;
-    img.writeToFilePath(std.heap.page_allocator, path, &write_buffer, .{
-        .png = .{ .filter_choice = .heuristic },
-    }) catch return error.WriteError;
-}
-
-fn writeRgbPng(data: []u8, width: u32, height: u32, path: []const u8) !void {
-    // Create RGB pixel data slice with correct type
-    const pixel_data: []zigimg.color.Rgb24 = @as(
-        [*]zigimg.color.Rgb24,
-        @ptrCast(data.ptr),
-    )[0 .. @as(usize, width) * @as(usize, height)];
-
-    // Create image with RGB pixels
-    const img = zigimg.Image{
-        .width = width,
-        .height = height,
-        .pixels = .{ .rgb24 = pixel_data },
-    };
-
-    // Write to file with best filter choice for compression
-    var write_buffer: [4096]u8 = undefined;
-    img.writeToFilePath(std.heap.page_allocator, path, &write_buffer, .{
-        .png = .{ .filter_choice = .heuristic },
-    }) catch return error.WriteError;
-}
-
-pub fn printUsage(stdout: *std.Io.Writer) void {
+fn printUsage(stdout: *std.Io.Writer) void {
     stdout.writeAll(
         \\Usage: pdfzig visual_diff [options] <first.pdf> <second.pdf>
         \\
@@ -426,4 +342,46 @@ pub fn printUsage(stdout: *std.Io.Writer) void {
         \\  pdfzig visual_diff -P secret1 -P secret2 enc1.pdf enc2.pdf
         \\
     ) catch {};
+}
+
+fn writeGrayscalePng(allocator: std.mem.Allocator, data: []u8, width: u32, height: u32, path: []const u8) !void {
+    // Create grayscale pixel data slice with correct type
+    const pixel_data: []zigimg.color.Grayscale8 = @as(
+        [*]zigimg.color.Grayscale8,
+        @ptrCast(data.ptr),
+    )[0 .. @as(usize, width) * @as(usize, height)];
+
+    // Create image with grayscale pixels
+    const img = zigimg.Image{
+        .width = width,
+        .height = height,
+        .pixels = .{ .grayscale8 = pixel_data },
+    };
+
+    // Write to file with best filter choice for compression
+    var write_buffer: [4096]u8 = undefined;
+    img.writeToFilePath(allocator, path, &write_buffer, .{
+        .png = .{ .filter_choice = .heuristic },
+    }) catch return error.WriteError;
+}
+
+fn writeRgbPng(allocator: std.mem.Allocator, data: []u8, width: u32, height: u32, path: []const u8) !void {
+    // Create RGB pixel data slice with correct type
+    const pixel_data: []zigimg.color.Rgb24 = @as(
+        [*]zigimg.color.Rgb24,
+        @ptrCast(data.ptr),
+    )[0 .. @as(usize, width) * @as(usize, height)];
+
+    // Create image with RGB pixels
+    const img = zigimg.Image{
+        .width = width,
+        .height = height,
+        .pixels = .{ .rgb24 = pixel_data },
+    };
+
+    // Write to file with best filter choice for compression
+    var write_buffer: [4096]u8 = undefined;
+    img.writeToFilePath(allocator, path, &write_buffer, .{
+        .png = .{ .filter_choice = .heuristic },
+    }) catch return error.WriteError;
 }

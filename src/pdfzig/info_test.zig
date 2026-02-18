@@ -10,7 +10,7 @@ const base_download_url = "https://raw.githubusercontent.com/py-pdf/sample-files
 /// Expected test file metadata from files.json
 const TestFile = struct {
     path: []const u8,
-    pages: ?u32,
+    pages: ?usize,
     encrypted: bool,
     images: ?u32,
     forms: u32,
@@ -305,11 +305,11 @@ test "info: multi-page document" {
     var doc = try pdfium.Document.open(allocator, local_path);
     defer doc.close();
 
-    try std.testing.expectEqual(@as(u32, 4), doc.getPageCount());
+    try std.testing.expectEqual(@as(usize, 4), doc.getPageCount());
 
     // Should be able to load each page
     for (0..4) |i| {
-        var page = try doc.loadPage(@intCast(i));
+        var page = try doc.loadPage(i);
         page.close();
     }
 }
