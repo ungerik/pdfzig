@@ -1,6 +1,6 @@
 # pdfzig
 
-A fast, cross-platform PDF utility tool written in Zig, powered by PDFium.
+A fast, cross-platform PDF library and CLI tool written in Zig, powered by PDFium.
 
 ## Features
 
@@ -52,6 +52,64 @@ PDFium is automatically downloaded on first use if not already present. The libr
 Downloads are verified using SHA256 checksums from the GitHub release API to ensure authenticity and integrity.
 
 The executable will be in `zig-out/bin/`.
+
+## Library Usage
+
+pdfzig can be used as a Zig library in your own projects. Add it as a dependency in your `build.zig.zon`:
+
+```zig
+.dependencies = .{
+    .pdfzig = .{
+        .url = "git+https://github.com/ungerik/pdfzig#main",
+        .hash = "...",
+    },
+},
+```
+
+Then in your `build.zig`:
+
+```zig
+const pdfzig_dep = b.dependency("pdfzig", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("pdfzig", pdfzig_dep.module("pdfzig"));
+```
+
+Use in your code:
+
+```zig
+const pdfzig = @import("pdfzig");
+
+// Initialize PDFium runtime
+pdfzig.pdfium.init() catch return error.PdfiumNotFound;
+defer pdfzig.pdfium.deinit();
+
+// Open a PDF document
+var doc = try pdfzig.pdfium.Document.open(allocator, "document.pdf");
+defer doc.close();
+
+// Rotate all pages 90 degrees
+const rotated = try pdfzig.rotate.rotatePages(allocator, &doc, 90, null);
+
+// Save the modified document
+try doc.saveWithVersion("output.pdf", null);
+```
+
+Available modules:
+
+| Module                | Description                              |
+|-----------------------|------------------------------------------|
+| `pdfzig.pdfium`       | Low-level PDFium bindings                |
+| `pdfzig.metadata`     | PDF metadata and PDF/A detection         |
+| `pdfzig.images`       | Image I/O (PNG/JPEG, BGRA conversion)    |
+| `pdfzig.textfmt`      | Text formatting and content generation   |
+| `pdfzig.shared`       | Shared utilities (open, load, temp file) |
+| `pdfzig.rotate`       | Rotate PDF pages                         |
+| `pdfzig.mirror`       | Mirror PDF pages                         |
+| `pdfzig.delete`       | Delete PDF pages                         |
+| `pdfzig.info`         | Get PDF metadata                         |
+| `pdfzig.extract_text` | Extract text from pages                  |
 
 ## Usage
 
